@@ -6,12 +6,15 @@ export interface GameState {
   isBoost: boolean;
 }
 
+export type RingGameMode = 'skyward' | 'mountain';
+
 export interface GameStats {
   score: number;
   speed: number;
   altitude: number;
   // Mini-game stats
   isRingGameActive: boolean;
+  ringGameMode: RingGameMode;
   combo: number;
   // AI Content
   currentMission: string;

@@ -20,6 +20,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
   // AI Content Refs
   const missionRef = useRef<HTMLDivElement>(null);
   const loreRef = useRef<HTMLDivElement>(null);
+  const warningRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let rAFId: number;
@@ -101,6 +102,12 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
             }
           }
         }
+
+        // Slow Down Warning
+        if (warningRef.current) {
+          const showWarning = !isRingGameActive && speed > 1.5;
+          warningRef.current.style.opacity = showWarning ? '1' : '0';
+        }
       }
       rAFId = requestAnimationFrame(update);
     };
@@ -134,6 +141,16 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
           ref={loreRef}
           className="text-sm md:text-base text-white/90 font-serif italic drop-shadow-md transition-all duration-1000 opacity-0 transform translate-y-4 bg-indigo-900/30 backdrop-blur-md p-4 rounded-xl border border-white/5"
         >
+        </div>
+      </div>
+
+      {/* Slow Down Warning */}
+      <div className="absolute top-40 left-1/2 -translate-x-1/2 w-full text-center pointer-events-none">
+        <div
+          ref={warningRef}
+          className="text-lg font-bold text-red-400 bg-black/40 backdrop-blur-sm px-6 py-2 rounded-full border border-red-500/30 transition-opacity duration-300 opacity-0 inline-block uppercase tracking-widest"
+        >
+          Slow down to begin ring game
         </div>
       </div>
 

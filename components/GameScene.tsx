@@ -12,7 +12,7 @@ import { HUD } from './HUD';
 import { RingManager } from './RingManager';
 import { WaterEffects } from './WaterEffects';
 import { AudioController, AudioHandle } from './AudioController';
-import { GameStats } from '../types';
+import { GameStats, RingGameMode } from '../types';
 
 // Simple Procedural Cloud Component
 const SimpleCloud: React.FC<{ position: [number, number, number]; scale?: number; opacity?: number }> = React.memo(({ position, scale = 1, opacity = 0.6 }) => {
@@ -116,6 +116,7 @@ export const GameScene: React.FC = () => {
     speed: 0,
     altitude: 0,
     isRingGameActive: false,
+    ringGameMode: 'skyward',
     combo: 0,
     currentMission: '',
     currentZoneLore: ''
@@ -129,8 +130,25 @@ export const GameScene: React.FC = () => {
   const targetRingRef = useRef<Vector3 | null>(null);
 
   const [isPaused, setIsPaused] = useState(false);
+  const [isPointerLocked, setIsPointerLocked] = useState(false);
+  const [showModeSelect, setShowModeSelect] = useState(false);
 
   const audioRef = useRef<AudioHandle>(null);
+
+  const handleShowModeSelect = useCallback(() => {
+    setShowModeSelect(true);
+    document.exitPointerLock();
+  }, []);
+
+  const handleModeSelect = useCallback((mode: RingGameMode) => {
+    if (statsRef.current) {
+      statsRef.current.ringGameMode = mode;
+      statsRef.current.isRingGameActive = true;
+      setShowModeSelect(false);
+      document.body.requestPointerLock();
+      audioRef.current?.playGameStart();
+    }
+  }, []);
 
   const handleBirdMove = useCallback((pos: Vector3) => {
     birdPosRef.current.copy(pos);
@@ -167,12 +185,21 @@ export const GameScene: React.FC = () => {
       }
     };
 
+    const handlePointerLockChange = () => {
+      setIsPointerLocked(!!document.pointerLockElement);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     document.addEventListener('click', handleClick);
+    document.addEventListener('pointerlockchange', handlePointerLockChange);
+
+    // Initial check
+    setIsPointerLocked(!!document.pointerLockElement);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('click', handleClick);
+      document.removeEventListener('pointerlockchange', handlePointerLockChange);
     };
   }, [isPaused]);
 
@@ -206,6 +233,41 @@ export const GameScene: React.FC = () => {
         </div>
       )}
 
+      {showModeSelect && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
+          <div className="bg-gradient-to-b from-indigo-900 to-purple-900 p-12 rounded-3xl border border-white/20 text-center shadow-2xl transform transition-all max-w-2xl w-full">
+            <h2 className="text-4xl font-black text-white mb-2 tracking-wider drop-shadow-lg italic">SELECT MODE</h2>
+            <p className="text-blue-200 mb-8 text-lg">Choose your challenge</p>
+
+            <div className="grid grid-cols-2 gap-6">
+              <button
+                onClick={() => handleModeSelect('mountain')}
+                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-yellow-400 rounded-2xl transition-all text-left"
+              >
+                <div className="text-2xl font-bold text-yellow-400 mb-2 group-hover:scale-105 transition-transform">MOUNTAIN RUNNER</div>
+                <div className="text-sm text-gray-300">Weave between treacherous mountain peaks. High intensity low-altitude flying.</div>
+              </button>
+
+              <button
+                onClick={() => handleModeSelect('skyward')}
+                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-400 rounded-2xl transition-all text-left"
+              >
+                <div className="text-2xl font-bold text-cyan-400 mb-2 group-hover:scale-105 transition-transform">SKYWARD</div>
+                <div className="text-sm text-gray-300">Soar through the clouds in a classic high-altitude endurance test.</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isPaused && !isPointerLocked && !showModeSelect && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/20 pointer-events-none">
+          <div className="bg-black/50 backdrop-blur-sm px-8 py-4 rounded-full border border-white/10 text-white font-bold tracking-widest animate-pulse">
+            CLICK TO CAPTURE MOUSE CURSOR
+          </div>
+        </div>
+      )}
+
       <Canvas shadows dpr={[1, 2]} camera={{ fov: 60, far: 4000 }}>
         <color attach="background" args={['#87CEEB']} />
         {/* Increased fog distance for larger world feel */}
@@ -230,12 +292,12 @@ export const GameScene: React.FC = () => {
         <Clouds />
 
         <World birdPosition={birdPosRef.current} />
-        <AmbientBirds isPaused={isPaused} />
+        <AmbientBirds isPaused={isPaused || showModeSelect} />
 
         <Bird
           statsRef={statsRef}
           onMove={handleBirdMove}
-          isPaused={isPaused}
+          isPaused={isPaused || showModeSelect}
           playFlapSound={handleFlap}
           rotationRef={birdRotRef}
         />
@@ -243,7 +305,7 @@ export const GameScene: React.FC = () => {
         <Collectibles
           birdPosition={birdPosRef.current}
           onCollect={handleCollect}
-          isPaused={isPaused}
+          isPaused={isPaused || showModeSelect}
         />
 
         <RingManager
@@ -251,13 +313,14 @@ export const GameScene: React.FC = () => {
           birdRotation={birdRotRef.current}
           statsRef={statsRef}
           audioRef={audioRef}
-          isPaused={isPaused}
+          isPaused={isPaused || showModeSelect}
           targetRingRef={targetRingRef}
+          onShowModeSelect={handleShowModeSelect}
         />
 
         <WaterEffects
           birdPosRef={birdPosRef}
-          isPaused={isPaused}
+          isPaused={isPaused || showModeSelect}
         />
 
         <NavArrow birdPos={birdPosRef.current} targetRef={targetRingRef} />

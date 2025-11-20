@@ -15,6 +15,7 @@ interface RingManagerProps {
     audioRef: React.RefObject<AudioHandle>;
     isPaused: boolean;
     targetRingRef: React.MutableRefObject<Vector3 | null>;
+    onShowModeSelect: () => void;
 }
 
 const RING_GAP = 80;
@@ -26,7 +27,7 @@ const MAX_SPAWN_SPEED = 1.5;
 // Reusable dummy for calculations
 const dummyObj = new Object3D();
 
-export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPosition, birdRotation, statsRef, audioRef, isPaused, targetRingRef }) => {
+export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPosition, birdRotation, statsRef, audioRef, isPaused, targetRingRef, onShowModeSelect }) => {
     const controls = useControls();
     // State
     const [rings, setRings] = useState<RingData[]>([]);
@@ -77,7 +78,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         const forward = new Vector3(0, 0, 1).applyQuaternion(birdRotation).normalize();
 
         // Ensure it is reasonably close so the player can see it immediately
-        const dist = 60;
+        const dist = 200;
 
         const startPos = birdPosition.clone().add(forward.multiplyScalar(dist));
 
@@ -126,7 +127,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
 
                 // Force spawn starter ring at fixed start position aligned with Bird.tsx reset
                 // Bird resets to (0, 350, 0) facing +Z
-                const resetStartPos = new Vector3(0, 350, 80);
+                const resetStartPos = new Vector3(0, 350, 200);
                 const resetForward = new Vector3(0, 0, 1);
 
                 nextRingId.current = 0;
@@ -138,6 +139,12 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
             return;
         } else {
             resetProcessed.current = false;
+        }
+
+        // Sync gameActive ref with stats (handled by GameScene for mode select)
+        if (statsRef.current.isRingGameActive && !gameActive.current) {
+            gameActive.current = true;
+            spawnCount.current = 0;
         }
 
 
@@ -194,15 +201,41 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
 
                 pathCursor.current.add(pathDirection.current.clone().multiplyScalar(RING_GAP));
 
-                // TERRAIN AVOIDANCE
-                const tH = getTerrainHeight(pathCursor.current.x, pathCursor.current.z);
-                const safeY = Math.max(tH, 10) + 40; // Clearance
+                pathCursor.current.add(pathDirection.current.clone().multiplyScalar(RING_GAP));
 
-                if (pathCursor.current.y < safeY) {
-                    pathCursor.current.y = safeY;
-                    // Pitch up to avoid getting stuck dragging along the ground
-                    pathDirection.current.y = Math.abs(pathDirection.current.y) + 0.3;
-                    pathDirection.current.normalize();
+                // TERRAIN AVOIDANCE & MOUNTAIN MODE LOGIC
+                const tH = getTerrainHeight(pathCursor.current.x, pathCursor.current.z);
+
+                let targetY = pathCursor.current.y;
+
+                if (statsRef.current.ringGameMode === 'mountain') {
+                    // Mountain Mode: Hug the terrain + 30
+                    const mountainTarget = tH + 30;
+                    // Smoothly pull towards mountain target
+                    targetY = targetY * 0.8 + mountainTarget * 0.2;
+
+                    // Ensure we don't go underground
+                    const safeY = Math.max(tH, 10) + 25;
+                    if (targetY < safeY) targetY = safeY;
+
+                    pathCursor.current.y = targetY;
+
+                    // Bias direction to follow terrain slope roughly
+                    if (pathCursor.current.y < tH + 50) {
+                        pathDirection.current.y += 0.1; // Pitch up if too low
+                    } else if (pathCursor.current.y > tH + 100) {
+                        pathDirection.current.y -= 0.1; // Pitch down if too high
+                    }
+
+                } else {
+                    // Skyward Mode (Default): Just avoid terrain
+                    const safeY = Math.max(tH, 10) + 40; // Clearance
+                    if (pathCursor.current.y < safeY) {
+                        pathCursor.current.y = safeY;
+                        // Pitch up to avoid getting stuck dragging along the ground
+                        pathDirection.current.y = Math.abs(pathDirection.current.y) + 0.3;
+                        pathDirection.current.normalize();
+                    }
                 }
 
                 const rand = Math.random();
@@ -242,12 +275,10 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                 dirty = true;
 
                 if (targetRing.type === 'starter') {
-                    gameActive.current = true;
-                    statsRef.current.isRingGameActive = true;
-                    statsRef.current.combo = 0;
-                    spawnCount.current = 0; // Reset spawn count for straight start
-                    audioRef.current?.playGameStart();
+                    // Trigger Mode Selection instead of immediate start
+                    onShowModeSelect();
 
+                    // Prepare path cursor but don't start game active state yet
                     pathCursor.current.copy(ringPos);
                     pathDirection.current.set(0, 0, 1).applyQuaternion(birdRotation).normalize();
                     pathNoiseOffset.current = Math.random() * 100;
