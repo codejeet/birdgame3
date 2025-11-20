@@ -179,7 +179,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
         </div>
 
         {/* Persistent Title */}
-        <h1 className="absolute left-1/2 -translate-x-1/2 top-2 text-4xl font-black text-white/90 tracking-tighter drop-shadow-lg italic">
+        <h1 className="absolute left-1/2 -translate-x-1/2 top-2 text-4xl font-black text-white/90 tracking-tighter drop-shadow-lg italic z-50">
           BIRD GAME 3
         </h1>
 
@@ -209,15 +209,24 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
           {/* Persistent Controls Note */}
           <div className="bg-black/30 backdrop-blur-md p-3 rounded-xl text-white border border-white/10 shadow-lg w-48">
             <div className="text-[10px] uppercase tracking-widest text-gray-400 mb-2 border-b border-white/10 pb-1">Controls</div>
-            <ul className="text-[10px] font-mono space-y-1 text-gray-200">
-              <li className="flex justify-between"><span>Move</span><span className="text-yellow-400 font-bold">WASD</span></li>
-              <li className="flex justify-between"><span>Fly/Steer</span><span className="text-yellow-400 font-bold">Mouse</span></li>
-              <li className="flex justify-between"><span>Flap</span><span className="text-yellow-400 font-bold">L-CLICK / SPC</span></li>
-              <li className="flex justify-between"><span>Dive</span><span className="text-yellow-400 font-bold">R-CLICK</span></li>
-              <li className="flex justify-between"><span>Boost</span><span className="text-yellow-400 font-bold">SHIFT</span></li>
-              <li className="flex justify-between"><span>Reset</span><span className="text-yellow-400 font-bold">R</span></li>
-              <li className="flex justify-between"><span>Cursor</span><span className="text-yellow-400 font-bold">ESC</span></li>
-            </ul>
+            {/Mobi|Android/i.test(navigator.userAgent) ? (
+              <ul className="text-[10px] font-mono space-y-1 text-gray-200">
+                <li className="flex justify-between"><span>Steer</span><span className="text-yellow-400 font-bold">L-Joystick</span></li>
+                <li className="flex justify-between"><span>Look</span><span className="text-yellow-400 font-bold">Drag Screen</span></li>
+                <li className="flex justify-between"><span>Flap</span><span className="text-yellow-400 font-bold">Tap Right</span></li>
+                <li className="flex justify-between"><span>Dive</span><span className="text-yellow-400 font-bold">Swipe Down</span></li>
+              </ul>
+            ) : (
+              <ul className="text-[10px] font-mono space-y-1 text-gray-200">
+                <li className="flex justify-between"><span>Move</span><span className="text-yellow-400 font-bold">WASD</span></li>
+                <li className="flex justify-between"><span>Fly/Steer</span><span className="text-yellow-400 font-bold">Mouse</span></li>
+                <li className="flex justify-between"><span>Flap</span><span className="text-yellow-400 font-bold">L-CLICK / SPC</span></li>
+                <li className="flex justify-between"><span>Dive</span><span className="text-yellow-400 font-bold">R-CLICK</span></li>
+                <li className="flex justify-between"><span>Boost</span><span className="text-yellow-400 font-bold">SHIFT</span></li>
+                <li className="flex justify-between"><span>Reset</span><span className="text-yellow-400 font-bold">R</span></li>
+                <li className="flex justify-between"><span>Cursor</span><span className="text-yellow-400 font-bold">ESC</span></li>
+              </ul>
+            )}
           </div>
         </div>
       </div>

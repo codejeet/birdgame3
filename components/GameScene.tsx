@@ -260,7 +260,7 @@ export const GameScene: React.FC = () => {
         </div>
       )}
 
-      {!isPaused && !isPointerLocked && !showModeSelect && (
+      {!isPaused && !isPointerLocked && !showModeSelect && !/Mobi|Android/i.test(navigator.userAgent) && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/20 pointer-events-none">
           <div className="bg-black/50 backdrop-blur-sm px-8 py-4 rounded-full border border-white/10 text-white font-bold tracking-widest animate-pulse">
             CLICK TO CAPTURE MOUSE CURSOR
