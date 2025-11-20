@@ -13,7 +13,6 @@ export interface GameStats {
   // Mini-game stats
   isRingGameActive: boolean;
   combo: number;
-  feathers: number;
   // AI Content
   currentMission: string;
   currentZoneLore: string;
