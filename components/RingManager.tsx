@@ -292,7 +292,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                     if (targetRing.type === 'moving') statsRef.current.score += 2;
                 }
 
-            } else if (distSq > 200 * 200) {
+            } else if (distSq > 400 * 400) {
                 // MISS (Too far away)
                 targetRing.passed = true;
                 if (gameActive.current) {

@@ -16,7 +16,9 @@ export function useControls() {
     reset: false,
     mouseDown: false,
     mouseX: 0,
+    mouseX: 0,
     mouseY: 0,
+    mobileTap: false,
   });
 
   // Internal state to track virtual joystick position [-1, 1]
@@ -41,7 +43,7 @@ export function useControls() {
         case 'KeyD': input.current.right = true; break;
         case 'KeyQ': input.current.rollLeft = true; break;
         case 'KeyE': input.current.rollRight = true; break;
-        case 'ShiftLeft': 
+        case 'ShiftLeft':
         case 'ShiftRight': input.current.boost = true; break;
         case 'Space': input.current.flap = true; break;
         case 'KeyR': input.current.reset = true; break;
@@ -56,7 +58,7 @@ export function useControls() {
         case 'KeyD': input.current.right = false; break;
         case 'KeyQ': input.current.rollLeft = false; break;
         case 'KeyE': input.current.rollRight = false; break;
-        case 'ShiftLeft': 
+        case 'ShiftLeft':
         case 'ShiftRight': input.current.boost = false; break;
         case 'Space': input.current.flap = false; break;
         case 'KeyR': input.current.reset = false; break;
@@ -172,6 +174,13 @@ export function useControls() {
     const handleTouchEnd = (e: TouchEvent) => {
       // If all touches are released
       if (e.touches.length === 0) {
+        // Check for TAP (Short duration, no drag)
+        const now = Date.now();
+        if (!touchState.current.isDragging && (now - touchState.current.touchStartTime < 250)) {
+          input.current.mobileTap = true;
+          setTimeout(() => { input.current.mobileTap = false; }, 100);
+        }
+
         // Release all controls
         input.current.flap = false;
         input.current.dive = false;

@@ -273,8 +273,8 @@ export const GameScene: React.FC = () => {
         {/* Increased fog distance for larger world feel */}
         <fog attach="fog" args={['#87CEEB', 500, 3500]} />
 
-        <Sky sunPosition={[100, 20, 100]} turbidity={0.5} rayleigh={0.5} mieCoefficient={0.005} mieDirectionalG={0.8} />
-        <Stars radius={300} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+        <Sky sunPosition={[100, 20, 100]} turbidity={0.5} rayleigh={0.5} mieCoefficient={0.005} mieDirectionalG={0.8} distance={450000} />
+        <Stars radius={5000} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
 
         <ambientLight intensity={0.4} color="#ccccff" />
         <directionalLight
@@ -325,7 +325,7 @@ export const GameScene: React.FC = () => {
 
         <NavArrow birdPos={birdPosRef.current} targetRef={targetRingRef} />
 
-        <EffectComposer enableNormalPass={false}>
+        <EffectComposer disableNormalPass={true}>
           <Bloom luminanceThreshold={0.5} mipmapBlur intensity={0.5} radius={0.6} />
           <Vignette eskil={false} offset={0.1} darkness={0.5} />
         </EffectComposer>

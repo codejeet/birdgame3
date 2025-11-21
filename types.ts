@@ -35,6 +35,7 @@ export interface ControlsState {
   mouseDown: boolean;
   mouseX: number;
   mouseY: number;
+  mobileTap: boolean;
 }
 
 export type OrbData = {
