@@ -16,6 +16,8 @@ interface RingManagerProps {
     isPaused: boolean;
     targetRingRef: React.MutableRefObject<Vector3 | null>;
     onShowModeSelect: () => void;
+    onGameOver?: () => void;
+    onCheckpoint?: (checkpoints: number) => void;
 }
 
 const RING_GAP = 80;
@@ -24,10 +26,18 @@ const RING_RADIUS_SMALL = 5;
 const COOLDOWN_PERIOD = 10.0; // Seconds
 const MAX_SPAWN_SPEED = 1.5;
 
+// Race mode settings
+const RACE_BASE_GAP = 80;           // Starting distance between rings
+const RACE_GAP_INCREMENT = 8;       // How much farther each ring gets
+const RACE_MAX_GAP = 180;           // Maximum distance cap (reached around ring 12-13)
+const RACE_TIME_PER_DISTANCE = 0.08; // Seconds per unit of distance
+const RACE_BASE_TIME_BONUS = 3.0;   // Base seconds for each ring
+const RACE_FIRST_RING_TIME = 8.0;   // Time to reach the first ring
+
 // Reusable dummy for calculations
 const dummyObj = new Object3D();
 
-export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPosition, birdRotation, statsRef, audioRef, isPaused, targetRingRef, onShowModeSelect }) => {
+export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPosition, birdRotation, statsRef, audioRef, isPaused, targetRingRef, onShowModeSelect, onGameOver, onCheckpoint }) => {
     const controls = useControls();
     // State
     const [rings, setRings] = useState<RingData[]>([]);
@@ -39,6 +49,11 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
     const resetProcessed = useRef(false);
     const spawnCount = useRef(0);
     const lastSpawnTime = useRef(-100); // Allow immediate spawn at start
+
+    // Race mode state
+    const raceStartTime = useRef(0);
+    const lastRaceUpdateTime = useRef(0);
+    const raceCurrentGap = useRef(RACE_BASE_GAP);
 
     // Path generation state
     const pathCursor = useRef(new Vector3());
@@ -105,6 +120,9 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         ringsRef.current = [];
         setRings([]);
         lastSpawnTime.current = time;
+        
+        // Notify multiplayer of game over
+        onGameOver?.();
     };
 
     useFrame((state, delta) => {
@@ -145,6 +163,28 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         if (statsRef.current.isRingGameActive && !gameActive.current) {
             gameActive.current = true;
             spawnCount.current = 0;
+            
+            // Initialize race mode
+            if (statsRef.current.ringGameMode === 'race') {
+                raceStartTime.current = time;
+                lastRaceUpdateTime.current = time;
+                raceCurrentGap.current = RACE_BASE_GAP;
+                statsRef.current.raceTimeRemaining = RACE_FIRST_RING_TIME;
+                statsRef.current.raceRingsCollected = 0;
+            }
+        }
+        
+        // Race mode timer tick
+        if (gameActive.current && statsRef.current.ringGameMode === 'race') {
+            const elapsed = time - lastRaceUpdateTime.current;
+            lastRaceUpdateTime.current = time;
+            statsRef.current.raceTimeRemaining -= elapsed;
+            
+            // End race when time runs out
+            if (statsRef.current.raceTimeRemaining <= 0) {
+                statsRef.current.raceTimeRemaining = 0;
+                endGame(time);
+            }
         }
 
 
@@ -180,8 +220,11 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         // 3. Path Generation (Only if active)
         if (gameActive.current) {
             const uncollectedCount = ringsRef.current.filter(r => !r.passed).length;
+            
+            // In race mode, only spawn one ring at a time with increasing gap
+            const maxUncollected = statsRef.current.ringGameMode === 'race' ? 1 : 10;
 
-            if (uncollectedCount < 10) {
+            if (uncollectedCount < maxUncollected) {
                 pathNoiseOffset.current += 0.1;
 
                 // Ramp up noise intensity to ensure path starts straight relative to player
@@ -199,9 +242,12 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                 if (pathCursor.current.y > 300) pathDirection.current.y -= 0.2;
                 pathDirection.current.normalize();
 
-                pathCursor.current.add(pathDirection.current.clone().multiplyScalar(RING_GAP));
+                // Use increasing gap for race mode
+                const currentGap = statsRef.current.ringGameMode === 'race' ? raceCurrentGap.current : RING_GAP;
 
-                pathCursor.current.add(pathDirection.current.clone().multiplyScalar(RING_GAP));
+                pathCursor.current.add(pathDirection.current.clone().multiplyScalar(currentGap));
+
+                pathCursor.current.add(pathDirection.current.clone().multiplyScalar(currentGap));
 
                 // TERRAIN AVOIDANCE & MOUNTAIN MODE LOGIC
                 const tH = getTerrainHeight(pathCursor.current.x, pathCursor.current.z);
@@ -290,14 +336,37 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
 
                     if (targetRing.type === 'small') statsRef.current.score += 1;
                     if (targetRing.type === 'moving') statsRef.current.score += 2;
+                    
+                    // Race mode: track rings collected and calculate time for next ring
+                    if (statsRef.current.ringGameMode === 'race') {
+                        statsRef.current.raceRingsCollected += 1;
+                        
+                        // Notify multiplayer of checkpoint
+                        onCheckpoint?.(statsRef.current.raceRingsCollected);
+                        
+                        // Increase gap for next ring (capped at max)
+                        raceCurrentGap.current = Math.min(raceCurrentGap.current + RACE_GAP_INCREMENT, RACE_MAX_GAP);
+                        
+                        // Calculate time for next ring based on distance
+                        const nextRingTime = RACE_BASE_TIME_BONUS + (raceCurrentGap.current * RACE_TIME_PER_DISTANCE);
+                        statsRef.current.raceTimeRemaining = nextRingTime;
+                        lastRaceUpdateTime.current = time;
+                    }
                 }
 
             } else if (distSq > 400 * 400) {
                 // MISS (Too far away)
                 targetRing.passed = true;
                 if (gameActive.current) {
-                    // Game Over immediately on miss
-                    endGame(time);
+                    // In race mode, missing doesn't end the game - only time running out does
+                    // In other modes, game over on miss
+                    if (statsRef.current.ringGameMode !== 'race') {
+                        endGame(time);
+                    } else {
+                        // Reset combo on miss in race mode
+                        statsRef.current.combo = 0;
+                        dirty = true;
+                    }
                 } else {
                     // Only respawn if cooldown passed AND speed is low enough
                     const now = state.clock.getElapsedTime();

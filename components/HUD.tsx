@@ -1,12 +1,21 @@
 
 import React, { useEffect, useRef } from 'react';
-import { GameStats } from '../types';
+import { GameStats, RaceParticipant } from '../types';
+
+interface MultiplayerInfo {
+  connected: boolean;
+  playerName: string | null;
+  playerCount: number;
+  inRace: boolean;
+  raceParticipants: RaceParticipant[];
+}
 
 interface HUDProps {
   statsRef: React.MutableRefObject<GameStats>;
+  multiplayer?: MultiplayerInfo;
 }
 
-export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
+export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
   // Refs for direct DOM updates to avoid React render cycles
   const scoreRef = useRef<HTMLDivElement>(null);
   const altRef = useRef<HTMLSpanElement>(null);
@@ -16,6 +25,11 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
   // Mini-game refs
   const ringPanelRef = useRef<HTMLDivElement>(null);
   const comboRef = useRef<HTMLDivElement>(null);
+  
+  // Race mode refs
+  const racePanelRef = useRef<HTMLDivElement>(null);
+  const raceTimerRef = useRef<HTMLDivElement>(null);
+  const raceRingsRef = useRef<HTMLDivElement>(null);
 
   // AI Content Refs
   const missionRef = useRef<HTMLDivElement>(null);
@@ -30,13 +44,17 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
 
     let lastActive = false;
     let lastCombo = -1;
+    
+    let lastRaceTime = -1;
+    let lastRaceRings = -1;
+    let lastRaceMode = false;
 
     let lastMission = '';
     let lastLore = '';
 
     const update = () => {
       if (statsRef.current) {
-        const { score, altitude, speed, isRingGameActive, combo, currentMission, currentZoneLore } = statsRef.current;
+        const { score, altitude, speed, isRingGameActive, combo, currentMission, currentZoneLore, ringGameMode, raceTimeRemaining, raceRingsCollected } = statsRef.current;
 
         // Score
         if (score !== lastScore) {
@@ -87,18 +105,52 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
           lastLore = currentZoneLore;
         }
 
-        // Ring Game HUD Logic
+        // Ring Game HUD Logic (non-race modes)
         if (ringPanelRef.current) {
-          if (isRingGameActive !== lastActive) {
-            ringPanelRef.current.style.opacity = isRingGameActive ? '1' : '0';
-            ringPanelRef.current.style.transform = isRingGameActive ? 'translateY(0)' : 'translateY(-20px)';
-            lastActive = isRingGameActive;
+          const showRingPanel = isRingGameActive && ringGameMode !== 'race';
+          if (showRingPanel !== lastActive) {
+            ringPanelRef.current.style.opacity = showRingPanel ? '1' : '0';
+            ringPanelRef.current.style.transform = showRingPanel ? 'translateY(0)' : 'translateY(-20px)';
+            lastActive = showRingPanel;
           }
 
-          if (isRingGameActive) {
+          if (showRingPanel) {
             if (combo !== lastCombo) {
               if (comboRef.current) comboRef.current.innerText = `x${combo}`;
               lastCombo = combo;
+            }
+          }
+        }
+        
+        // Race Mode HUD Logic
+        if (racePanelRef.current) {
+          const isRaceMode = isRingGameActive && ringGameMode === 'race';
+          if (isRaceMode !== lastRaceMode) {
+            racePanelRef.current.style.opacity = isRaceMode ? '1' : '0';
+            racePanelRef.current.style.transform = isRaceMode ? 'translateY(0)' : 'translateY(-20px)';
+            lastRaceMode = isRaceMode;
+          }
+          
+          if (isRaceMode) {
+            const displayTime = Math.max(0, Math.ceil(raceTimeRemaining * 10) / 10).toFixed(1);
+            if (raceTimeRemaining !== lastRaceTime) {
+              if (raceTimerRef.current) {
+                raceTimerRef.current.innerText = displayTime + 's';
+                // Flash red when low on time
+                if (raceTimeRemaining <= 5) {
+                  raceTimerRef.current.classList.add('text-red-400');
+                  raceTimerRef.current.classList.remove('text-orange-400');
+                } else {
+                  raceTimerRef.current.classList.remove('text-red-400');
+                  raceTimerRef.current.classList.add('text-orange-400');
+                }
+              }
+              lastRaceTime = raceTimeRemaining;
+            }
+            
+            if (raceRingsCollected !== lastRaceRings) {
+              if (raceRingsRef.current) raceRingsRef.current.innerText = raceRingsCollected.toString();
+              lastRaceRings = raceRingsCollected;
             }
           }
         }
@@ -163,7 +215,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
             <div ref={scoreRef} className="text-4xl font-bold text-yellow-400 font-mono">0</div>
           </div>
 
-          {/* Ring Game HUD Panel */}
+          {/* Ring Game HUD Panel (non-race modes) */}
           <div
             ref={ringPanelRef}
             className="bg-gradient-to-r from-indigo-900/80 to-purple-900/80 backdrop-blur-md p-4 rounded-xl text-white border border-white/20 shadow-xl transition-all duration-500 opacity-0 -translate-y-4"
@@ -173,6 +225,24 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
               <div className="flex justify-between items-center w-32">
                 <span className="text-xs text-gray-300">COMBO</span>
                 <span ref={comboRef} className="text-2xl font-black text-cyan-400 italic">x0</span>
+              </div>
+            </div>
+          </div>
+          
+          {/* Race Mode HUD Panel */}
+          <div
+            ref={racePanelRef}
+            className="bg-gradient-to-r from-orange-900/80 to-red-900/80 backdrop-blur-md p-4 rounded-xl text-white border border-orange-500/30 shadow-xl transition-all duration-500 opacity-0 -translate-y-4"
+          >
+            <div className="text-xs uppercase tracking-widest text-orange-300 mb-2 border-b border-white/10 pb-1">🏁 Checkpoint Race</div>
+            <div className="flex flex-col gap-2">
+              <div className="flex justify-between items-center w-36">
+                <span className="text-xs text-gray-300">NEXT RING</span>
+                <span ref={raceTimerRef} className="text-3xl font-black text-orange-400 font-mono tabular-nums">8.0s</span>
+              </div>
+              <div className="flex justify-between items-center w-36">
+                <span className="text-xs text-gray-300">CHECKPOINTS</span>
+                <span ref={raceRingsRef} className="text-2xl font-bold text-yellow-400">0</span>
               </div>
             </div>
           </div>
@@ -228,6 +298,47 @@ export const HUD: React.FC<HUDProps> = ({ statsRef }) => {
               </ul>
             )}
           </div>
+          
+          {/* Multiplayer Status */}
+          {multiplayer && (
+            <div className="bg-black/30 backdrop-blur-md p-3 rounded-xl text-white border border-white/10 shadow-lg w-48">
+              <div className="text-[10px] uppercase tracking-widest text-gray-400 mb-2 border-b border-white/10 pb-1">
+                {multiplayer.connected ? '🟢 Online' : '🔴 Offline'}
+              </div>
+              {multiplayer.connected && (
+                <div className="text-xs space-y-1">
+                  <div className="text-cyan-300 font-bold truncate">{multiplayer.playerName}</div>
+                  <div className="text-gray-400">
+                    🐦 {multiplayer.playerCount + 1} birds flying
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Race Leaderboard */}
+          {multiplayer?.inRace && multiplayer.raceParticipants.length > 0 && (
+            <div className="bg-gradient-to-b from-orange-900/80 to-red-900/80 backdrop-blur-md p-3 rounded-xl text-white border border-orange-500/30 shadow-lg w-48">
+              <div className="text-[10px] uppercase tracking-widest text-orange-300 mb-2 border-b border-white/10 pb-1">
+                🏁 Race Leaderboard
+              </div>
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {[...multiplayer.raceParticipants]
+                  .sort((a, b) => b.checkpoints - a.checkpoints)
+                  .map((p, i) => (
+                    <div 
+                      key={p.id} 
+                      className={`text-xs flex justify-between ${p.name === multiplayer.playerName ? 'text-yellow-300 font-bold' : 'text-gray-300'}`}
+                    >
+                      <span className="truncate max-w-[100px]">
+                        {i + 1}. {p.name}
+                      </span>
+                      <span className="text-orange-400">{p.checkpoints}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

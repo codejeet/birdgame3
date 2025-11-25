@@ -12,6 +12,8 @@ import { HUD } from './HUD';
 import { RingManager } from './RingManager';
 import { WaterEffects } from './WaterEffects';
 import { AudioController, AudioHandle } from './AudioController';
+import { OtherPlayers } from './OtherPlayers';
+import { useMultiplayer } from '../utils/multiplayer';
 import { GameStats, RingGameMode } from '../types';
 
 // Simple Procedural Cloud Component
@@ -118,6 +120,8 @@ export const GameScene: React.FC = () => {
     isRingGameActive: false,
     ringGameMode: 'skyward',
     combo: 0,
+    raceTimeRemaining: 0,
+    raceRingsCollected: 0,
     currentMission: '',
     currentZoneLore: ''
   });
@@ -134,6 +138,9 @@ export const GameScene: React.FC = () => {
   const [showModeSelect, setShowModeSelect] = useState(false);
 
   const audioRef = useRef<AudioHandle>(null);
+  
+  // Multiplayer
+  const multiplayer = useMultiplayer();
 
   const handleShowModeSelect = useCallback(() => {
     setShowModeSelect(true);
@@ -147,12 +154,30 @@ export const GameScene: React.FC = () => {
       setShowModeSelect(false);
       document.body.requestPointerLock();
       audioRef.current?.playGameStart();
+      
+      // Join multiplayer race if race mode selected
+      if (mode === 'race') {
+        multiplayer.joinRace(mode);
+      }
     }
-  }, []);
+  }, [multiplayer]);
 
   const handleBirdMove = useCallback((pos: Vector3) => {
     birdPosRef.current.copy(pos);
-  }, []);
+    
+    // Send position to server
+    multiplayer.updatePosition(
+      [pos.x, pos.y, pos.z],
+      [birdRotRef.current.x, birdRotRef.current.y, birdRotRef.current.z, birdRotRef.current.w]
+    );
+  }, [multiplayer]);
+  
+  // Handle game over (leave race)
+  const handleGameOver = useCallback(() => {
+    if (multiplayer.inRace) {
+      multiplayer.leaveRace();
+    }
+  }, [multiplayer]);
 
   const handleCollect = useCallback(() => {
     statsRef.current.score += 1;
@@ -205,7 +230,16 @@ export const GameScene: React.FC = () => {
 
   return (
     <>
-      <HUD statsRef={statsRef} />
+      <HUD 
+        statsRef={statsRef} 
+        multiplayer={{
+          connected: multiplayer.connected,
+          playerName: multiplayer.playerName,
+          playerCount: multiplayer.players.size,
+          inRace: multiplayer.inRace,
+          raceParticipants: multiplayer.raceParticipants
+        }}
+      />
       <AudioController ref={audioRef} isPaused={isPaused} />
 
       {isPaused && (
@@ -235,11 +269,11 @@ export const GameScene: React.FC = () => {
 
       {showModeSelect && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-          <div className="bg-gradient-to-b from-indigo-900 to-purple-900 p-12 rounded-3xl border border-white/20 text-center shadow-2xl transform transition-all max-w-2xl w-full">
+          <div className="bg-gradient-to-b from-indigo-900 to-purple-900 p-12 rounded-3xl border border-white/20 text-center shadow-2xl transform transition-all max-w-3xl w-full">
             <h2 className="text-4xl font-black text-white mb-2 tracking-wider drop-shadow-lg italic">SELECT MODE</h2>
             <p className="text-blue-200 mb-8 text-lg">Choose your challenge</p>
 
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-3 gap-6">
               <button
                 onClick={() => handleModeSelect('mountain')}
                 className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-yellow-400 rounded-2xl transition-all text-left"
@@ -254,6 +288,14 @@ export const GameScene: React.FC = () => {
               >
                 <div className="text-2xl font-bold text-cyan-400 mb-2 group-hover:scale-105 transition-transform">SKYWARD</div>
                 <div className="text-sm text-gray-300">Soar through the clouds in a classic high-altitude endurance test.</div>
+              </button>
+
+              <button
+                onClick={() => handleModeSelect('race')}
+                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-orange-400 rounded-2xl transition-all text-left"
+              >
+                <div className="text-2xl font-bold text-orange-400 mb-2 group-hover:scale-105 transition-transform">RACE</div>
+                <div className="text-sm text-gray-300">Checkpoint race! Reach each ring before time runs out. Each ring gets farther away.</div>
               </button>
             </div>
           </div>
@@ -316,6 +358,8 @@ export const GameScene: React.FC = () => {
           isPaused={isPaused || showModeSelect}
           targetRingRef={targetRingRef}
           onShowModeSelect={handleShowModeSelect}
+          onGameOver={handleGameOver}
+          onCheckpoint={multiplayer.updateCheckpoint}
         />
 
         <WaterEffects
@@ -324,6 +368,12 @@ export const GameScene: React.FC = () => {
         />
 
         <NavArrow birdPos={birdPosRef.current} targetRef={targetRingRef} />
+        
+        {/* Other multiplayer birds */}
+        <OtherPlayers 
+          players={multiplayer.players} 
+          localPlayerId={multiplayer.playerId} 
+        />
 
         <EffectComposer disableNormalPass={true}>
           <Bloom luminanceThreshold={0.5} mipmapBlur intensity={0.5} radius={0.6} />

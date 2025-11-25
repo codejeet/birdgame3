@@ -6,7 +6,7 @@ export interface GameState {
   isBoost: boolean;
 }
 
-export type RingGameMode = 'skyward' | 'mountain';
+export type RingGameMode = 'skyward' | 'mountain' | 'race';
 
 export interface GameStats {
   score: number;
@@ -16,6 +16,9 @@ export interface GameStats {
   isRingGameActive: boolean;
   ringGameMode: RingGameMode;
   combo: number;
+  // Race mode stats
+  raceTimeRemaining: number;
+  raceRingsCollected: number;
   // AI Content
   currentMission: string;
   currentZoneLore: string;
@@ -54,4 +57,31 @@ export interface RingData {
   active: boolean;
   scale: number;
   passed: boolean;
+}
+
+// Multiplayer types
+export interface RemotePlayer {
+  id: string;
+  name: string;
+  position: [number, number, number];
+  rotation: [number, number, number, number]; // Quaternion wxyz
+  inRace: boolean;
+  raceCheckpoints: number;
+}
+
+export interface RaceParticipant {
+  id: string;
+  name: string;
+  checkpoints: number;
+}
+
+export interface MultiplayerState {
+  connected: boolean;
+  playerId: string | null;
+  playerName: string | null;
+  players: Map<string, RemotePlayer>;
+  inRace: boolean;
+  raceId: string | null;
+  raceSeed: number | null;
+  raceParticipants: RaceParticipant[];
 }
