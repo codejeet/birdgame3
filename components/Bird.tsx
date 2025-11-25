@@ -12,13 +12,15 @@ interface BirdProps {
     isPaused: boolean;
     playFlapSound: () => void;
     rotationRef?: React.MutableRefObject<Quaternion>;
+    teleportTarget?: [number, number, number] | null;
+    frozen?: boolean;
 }
 
 type BirdMode = 'flying' | 'walking';
 
 const WATER_LEVEL = 10;
 
-export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rotationRef }: BirdProps) => {
+export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rotationRef, teleportTarget, frozen }: BirdProps) => {
     const birdRef = useRef<Group>(null);
     const { camera } = useThree();
     const controls = useControls();
@@ -33,6 +35,9 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
     const speed = useRef(0.5); // Forward speed for flying
     const velocity = useRef(new Vector3(0, 0, 0)); // 3D Velocity for walking
     const quaternion = useRef(new Quaternion());
+    
+    // Track last teleport to avoid re-teleporting
+    const lastTeleportTarget = useRef<string | null>(null);
 
     // Visuals
     const bank = useRef(0);
@@ -49,9 +54,49 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
             position.current.y = safeY + 100;
         }
     }, []);
+    
+    // Handle teleport
+    useEffect(() => {
+        if (teleportTarget) {
+            const targetKey = teleportTarget.join(',');
+            if (lastTeleportTarget.current !== targetKey) {
+                position.current.set(teleportTarget[0], teleportTarget[1], teleportTarget[2]);
+                speed.current = 0;
+                velocity.current.set(0, 0, 0);
+                mode.current = 'flying';
+                lastTeleportTarget.current = targetKey;
+                onMove(position.current);
+            }
+        }
+    }, [teleportTarget, onMove]);
 
     useFrame((state, delta) => {
         if (isPaused || !birdRef.current) return;
+        
+        // When frozen (in lobby), just update visuals but don't move
+        if (frozen) {
+            // Gentle hovering animation
+            const hoverOffset = Math.sin(state.clock.elapsedTime * 2) * 0.5;
+            birdRef.current.position.copy(position.current);
+            birdRef.current.position.y += hoverOffset;
+            birdRef.current.quaternion.copy(quaternion.current);
+            
+            // Gentle wing flap
+            if (wingLeftRef.current && wingRightRef.current) {
+                const flapAngle = Math.sin(state.clock.elapsedTime * 4) * 0.2;
+                wingLeftRef.current.rotation.z = flapAngle + 0.2;
+                wingRightRef.current.rotation.z = -flapAngle - 0.2;
+            }
+            
+            // Camera still follows
+            const camOffset = new Vector3(0, 5, -15).applyQuaternion(quaternion.current);
+            const targetCamPos = position.current.clone().add(camOffset);
+            camera.position.lerp(targetCamPos, delta * 3.0);
+            camera.lookAt(position.current);
+            
+            onMove(position.current);
+            return;
+        }
 
         const { forward, backward, left, right, rollLeft, rollRight, boost, flap, dive, reset, mouseX, mouseY } = controls.current;
 

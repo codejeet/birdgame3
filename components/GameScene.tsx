@@ -138,20 +138,26 @@ export const GameScene: React.FC = () => {
   const [isPointerLocked, setIsPointerLocked] = useState(false);
   const [showModeSelect, setShowModeSelect] = useState(false);
   const [pendingRacePortalPosition, setPendingRacePortalPosition] = useState<[number, number, number] | null>(null);
+  const [teleportTarget, setTeleportTarget] = useState<[number, number, number] | null>(null);
 
   const audioRef = useRef<AudioHandle>(null);
   
   // Multiplayer
   const multiplayer = useMultiplayer();
+  
+  // Check if player is frozen (in lobby waiting)
+  const isInLobby = multiplayer.lobby !== null && !multiplayer.inRace;
 
   const handleShowModeSelect = useCallback(() => {
     setShowModeSelect(true);
     document.exitPointerLock();
     
-    // Store current position for potential race portal
+    // Store position for portal - spawn it higher and further forward so players don't fly in accidentally
     const pos = birdPosRef.current;
     const forward = new Vector3(0, 0, 1).applyQuaternion(birdRotRef.current);
-    const portalPos = pos.clone().add(forward.multiplyScalar(50));
+    const portalPos = pos.clone()
+      .add(forward.multiplyScalar(150))  // 150 units forward
+      .add(new Vector3(0, 50, 0));       // 50 units higher
     setPendingRacePortalPosition([portalPos.x, portalPos.y, portalPos.z]);
   }, []);
 
@@ -161,7 +167,8 @@ export const GameScene: React.FC = () => {
         // Create a lobby instead of starting immediately
         multiplayer.createLobby(pendingRacePortalPosition);
         setShowModeSelect(false);
-        // Don't start the game yet - wait in lobby
+        // Teleport host to the portal position
+        setTeleportTarget(pendingRacePortalPosition);
         return;
       }
       
@@ -176,6 +183,11 @@ export const GameScene: React.FC = () => {
   
   // Handle portal entry (joining someone else's lobby)
   const handleEnterPortal = useCallback((lobbyId: string) => {
+    // Find the portal position and teleport there
+    const portal = multiplayer.activePortals.find(p => p.lobbyId === lobbyId);
+    if (portal) {
+      setTeleportTarget(portal.position);
+    }
     multiplayer.joinLobby(lobbyId);
   }, [multiplayer]);
   
@@ -187,6 +199,7 @@ export const GameScene: React.FC = () => {
   // Handle leaving the lobby
   const handleLeaveLobby = useCallback(() => {
     multiplayer.leaveLobby();
+    setTeleportTarget(null); // Clear any teleport state
   }, [multiplayer]);
   
   // When race actually starts from lobby
@@ -196,8 +209,22 @@ export const GameScene: React.FC = () => {
       statsRef.current.isRingGameActive = true;
       document.body.requestPointerLock();
       audioRef.current?.playGameStart();
+      
+      // Teleport to race start position (in front of where the portal was)
+      if (multiplayer.raceStartPosition) {
+        setTeleportTarget(multiplayer.raceStartPosition);
+      } else {
+        // Fallback: move forward from current position
+        const pos = birdPosRef.current;
+        const forward = new Vector3(0, 0, 1).applyQuaternion(birdRotRef.current);
+        const startPos = pos.clone().add(forward.multiplyScalar(100));
+        setTeleportTarget([startPos.x, startPos.y, startPos.z]);
+      }
+      
+      // Clear teleport after a short delay so it doesn't interfere with gameplay
+      setTimeout(() => setTeleportTarget(null), 500);
     }
-  }, [multiplayer.inRace]);
+  }, [multiplayer.inRace, multiplayer.raceStartPosition]);
 
   const handleBirdMove = useCallback((pos: Vector3) => {
     birdPosRef.current.copy(pos);
@@ -457,6 +484,8 @@ export const GameScene: React.FC = () => {
           isPaused={isPaused || showModeSelect}
           playFlapSound={handleFlap}
           rotationRef={birdRotRef}
+          teleportTarget={teleportTarget}
+          frozen={isInLobby}
         />
 
         <Collectibles

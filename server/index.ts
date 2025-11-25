@@ -377,10 +377,18 @@ io.on('connection', (socket: Socket) => {
           }
         }
         
+        // Calculate start position (in front of portal, facing forward)
+        const startPosition: [number, number, number] = [
+          lobby.portalPosition[0],
+          lobby.portalPosition[1],
+          lobby.portalPosition[2] + 100  // 100 units in front of portal
+        ];
+        
         // Notify all players race is starting
         io.to(`race:${raceId}`).emit('race:start', {
           raceId,
           seed,
+          startPosition,
           players: Array.from(race.players).map(pid => {
             const p = players.get(pid);
             return p ? { id: p.id, name: p.name, checkpoints: 0 } : null;

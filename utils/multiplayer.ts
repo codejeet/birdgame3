@@ -14,6 +14,7 @@ interface MultiplayerHook {
   raceId: string | null;
   raceSeed: number | null;
   raceParticipants: RaceParticipant[];
+  raceStartPosition: [number, number, number] | null;
   // Lobby state
   lobby: LobbyState | null;
   activePortals: RacePortalData[];
@@ -40,6 +41,7 @@ export function useMultiplayer(): MultiplayerHook {
   const [raceId, setRaceId] = useState<string | null>(null);
   const [raceSeed, setRaceSeed] = useState<number | null>(null);
   const [raceParticipants, setRaceParticipants] = useState<RaceParticipant[]>([]);
+  const [raceStartPosition, setRaceStartPosition] = useState<[number, number, number] | null>(null);
   
   // Lobby state
   const [lobby, setLobby] = useState<LobbyState | null>(null);
@@ -231,12 +233,14 @@ export function useMultiplayer(): MultiplayerHook {
       raceId: string;
       seed: number;
       players: RaceParticipant[];
+      startPosition: [number, number, number];
     }) => {
       setLobby(null);
       setInRace(true);
       setRaceId(data.raceId);
       setRaceSeed(data.seed);
       setRaceParticipants(data.players);
+      setRaceStartPosition(data.startPosition);
       console.log(`🏁 Race started! Seed: ${data.seed}`);
     });
 
@@ -312,6 +316,7 @@ export function useMultiplayer(): MultiplayerHook {
     raceId,
     raceSeed,
     raceParticipants,
+    raceStartPosition,
     lobby,
     activePortals,
     updatePosition,
