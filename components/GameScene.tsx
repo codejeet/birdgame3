@@ -13,6 +13,7 @@ import { RingManager } from './RingManager';
 import { WaterEffects } from './WaterEffects';
 import { AudioController, AudioHandle } from './AudioController';
 import { OtherPlayers } from './OtherPlayers';
+import { RacePortals } from './RacePortal';
 import { useMultiplayer } from '../utils/multiplayer';
 import { GameStats, RingGameMode } from '../types';
 
@@ -136,6 +137,7 @@ export const GameScene: React.FC = () => {
   const [isPaused, setIsPaused] = useState(false);
   const [isPointerLocked, setIsPointerLocked] = useState(false);
   const [showModeSelect, setShowModeSelect] = useState(false);
+  const [pendingRacePortalPosition, setPendingRacePortalPosition] = useState<[number, number, number] | null>(null);
 
   const audioRef = useRef<AudioHandle>(null);
   
@@ -145,22 +147,57 @@ export const GameScene: React.FC = () => {
   const handleShowModeSelect = useCallback(() => {
     setShowModeSelect(true);
     document.exitPointerLock();
+    
+    // Store current position for potential race portal
+    const pos = birdPosRef.current;
+    const forward = new Vector3(0, 0, 1).applyQuaternion(birdRotRef.current);
+    const portalPos = pos.clone().add(forward.multiplyScalar(50));
+    setPendingRacePortalPosition([portalPos.x, portalPos.y, portalPos.z]);
   }, []);
 
   const handleModeSelect = useCallback((mode: RingGameMode) => {
     if (statsRef.current) {
+      if (mode === 'race' && pendingRacePortalPosition) {
+        // Create a lobby instead of starting immediately
+        multiplayer.createLobby(pendingRacePortalPosition);
+        setShowModeSelect(false);
+        // Don't start the game yet - wait in lobby
+        return;
+      }
+      
+      // For non-race modes, start immediately
       statsRef.current.ringGameMode = mode;
       statsRef.current.isRingGameActive = true;
       setShowModeSelect(false);
       document.body.requestPointerLock();
       audioRef.current?.playGameStart();
-      
-      // Join multiplayer race if race mode selected
-      if (mode === 'race') {
-        multiplayer.joinRace(mode);
-      }
     }
+  }, [multiplayer, pendingRacePortalPosition]);
+  
+  // Handle portal entry (joining someone else's lobby)
+  const handleEnterPortal = useCallback((lobbyId: string) => {
+    multiplayer.joinLobby(lobbyId);
   }, [multiplayer]);
+  
+  // Handle starting the race from lobby
+  const handleStartRace = useCallback(() => {
+    multiplayer.startRace();
+  }, [multiplayer]);
+  
+  // Handle leaving the lobby
+  const handleLeaveLobby = useCallback(() => {
+    multiplayer.leaveLobby();
+  }, [multiplayer]);
+  
+  // When race actually starts from lobby
+  useEffect(() => {
+    if (multiplayer.inRace && !statsRef.current.isRingGameActive) {
+      statsRef.current.ringGameMode = 'race';
+      statsRef.current.isRingGameActive = true;
+      document.body.requestPointerLock();
+      audioRef.current?.playGameStart();
+    }
+  }, [multiplayer.inRace]);
 
   const handleBirdMove = useCallback((pos: Vector3) => {
     birdPosRef.current.copy(pos);
@@ -292,12 +329,90 @@ export const GameScene: React.FC = () => {
 
               <button
                 onClick={() => handleModeSelect('race')}
-                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-orange-400 rounded-2xl transition-all text-left"
+                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-green-400 rounded-2xl transition-all text-left"
               >
-                <div className="text-2xl font-bold text-orange-400 mb-2 group-hover:scale-105 transition-transform">RACE</div>
-                <div className="text-sm text-gray-300">Checkpoint race! Reach each ring before time runs out. Each ring gets farther away.</div>
+                <div className="text-2xl font-bold text-green-400 mb-2 group-hover:scale-105 transition-transform">🏁 RACE LOBBY</div>
+                <div className="text-sm text-gray-300">Create a portal! Other birds can fly through to join your race.</div>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Race Lobby Waiting Screen */}
+      {multiplayer.lobby && !multiplayer.inRace && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-gradient-to-b from-green-900 to-emerald-900 p-10 rounded-3xl border border-green-500/30 text-center shadow-2xl max-w-lg w-full">
+            {multiplayer.lobby.countdown !== null ? (
+              // Countdown display
+              <div className="py-10">
+                <div className="text-8xl font-black text-white animate-pulse">
+                  {multiplayer.lobby.countdown}
+                </div>
+                <div className="text-2xl text-green-300 mt-4">Race starting...</div>
+              </div>
+            ) : (
+              <>
+                <h2 className="text-3xl font-black text-white mb-2 tracking-wider">
+                  {multiplayer.lobby.isHost ? '🏁 YOUR RACE LOBBY' : '🏁 RACE LOBBY'}
+                </h2>
+                <p className="text-green-300 mb-6">
+                  {multiplayer.lobby.isHost 
+                    ? 'A portal has appeared! Wait for others to join.' 
+                    : `Joined ${multiplayer.lobby.players.find(p => p.isHost)?.name}'s race`
+                  }
+                </p>
+                
+                {/* Player list */}
+                <div className="bg-black/30 rounded-xl p-4 mb-6">
+                  <div className="text-sm text-green-400 uppercase tracking-widest mb-3">Players ({multiplayer.lobby.players.length})</div>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {multiplayer.lobby.players.map(player => (
+                      <div 
+                        key={player.id}
+                        className={`flex items-center justify-between p-2 rounded-lg ${
+                          player.id === multiplayer.playerId ? 'bg-green-800/50' : 'bg-black/20'
+                        }`}
+                      >
+                        <span className="text-white font-medium">
+                          {player.isHost && '👑 '}{player.name}
+                          {player.id === multiplayer.playerId && ' (you)'}
+                        </span>
+                        <span className={`text-sm ${player.ready ? 'text-green-400' : 'text-gray-400'}`}>
+                          {player.ready ? '✓ Ready' : 'Waiting...'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* Actions */}
+                <div className="flex gap-4 justify-center">
+                  {multiplayer.lobby.isHost ? (
+                    <button
+                      onClick={handleStartRace}
+                      disabled={multiplayer.lobby.players.length < 1}
+                      className="px-8 py-4 bg-green-500 hover:bg-green-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-black font-bold rounded-xl transition-all transform hover:scale-105 text-lg uppercase tracking-widest"
+                    >
+                      Start Race!
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => multiplayer.setReady(!multiplayer.lobby?.players.find(p => p.id === multiplayer.playerId)?.ready)}
+                      className="px-8 py-4 bg-green-500 hover:bg-green-400 text-black font-bold rounded-xl transition-all transform hover:scale-105 text-lg uppercase tracking-widest"
+                    >
+                      {multiplayer.lobby.players.find(p => p.id === multiplayer.playerId)?.ready ? 'Not Ready' : 'Ready!'}
+                    </button>
+                  )}
+                  <button
+                    onClick={handleLeaveLobby}
+                    className="px-8 py-4 bg-transparent border-2 border-white/30 text-white hover:bg-white/10 font-bold rounded-xl transition-all text-lg uppercase tracking-widest"
+                  >
+                    Leave
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -373,6 +488,14 @@ export const GameScene: React.FC = () => {
         <OtherPlayers 
           players={multiplayer.players} 
           localPlayerId={multiplayer.playerId} 
+        />
+        
+        {/* Race portals from other players' lobbies */}
+        <RacePortals
+          portals={multiplayer.activePortals}
+          birdPosition={birdPosRef.current}
+          onEnterPortal={handleEnterPortal}
+          localLobbyId={multiplayer.lobby?.lobbyId || null}
         />
 
         <EffectComposer disableNormalPass={true}>

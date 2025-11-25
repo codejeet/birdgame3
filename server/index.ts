@@ -23,21 +23,40 @@ interface PlayerState {
   inRace: boolean;
   raceId: string | null;
   raceCheckpoints: number;
+  lobbyId: string | null;
   lastUpdate: number;
+}
+
+interface LobbyPlayer {
+  id: string;
+  name: string;
+  isHost: boolean;
+  ready: boolean;
+}
+
+interface Lobby {
+  id: string;
+  hostId: string;
+  hostName: string;
+  players: Map<string, LobbyPlayer>;
+  portalPosition: [number, number, number];
+  createdAt: number;
+  countdown: number | null; // null = waiting, number = countdown seconds
+  raceStarted: boolean;
 }
 
 interface RaceSession {
   id: string;
   players: Set<string>;
   startTime: number;
-  ringsSeed: number; // Shared seed for deterministic ring generation
+  ringsSeed: number;
   isActive: boolean;
 }
 
 // State
 const players = new Map<string, PlayerState>();
+const lobbies = new Map<string, Lobby>();
 const races = new Map<string, RaceSession>();
-let currentOpenRace: string | null = null; // Race that's accepting new players
 
 // Generate unique IDs
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -56,21 +75,29 @@ const generateBirdName = () => {
 setInterval(() => {
   const now = Date.now();
   for (const [id, player] of players) {
-    if (now - player.lastUpdate > 10000) { // 10 second timeout
+    if (now - player.lastUpdate > 10000) {
       console.log(`Player ${player.name} timed out`);
       handlePlayerLeave(id);
     }
   }
 }, 5000);
 
+// Cleanup old lobbies (5 min timeout)
+setInterval(() => {
+  const now = Date.now();
+  for (const [lobbyId, lobby] of lobbies) {
+    if (lobby.players.size === 0 || now - lobby.createdAt > 300000) {
+      lobbies.delete(lobbyId);
+      io.emit('lobby:removed', { lobbyId });
+    }
+  }
+}, 10000);
+
 // Cleanup empty races
 setInterval(() => {
   for (const [raceId, race] of races) {
     if (race.players.size === 0) {
       races.delete(raceId);
-      if (currentOpenRace === raceId) {
-        currentOpenRace = null;
-      }
     }
   }
 }, 10000);
@@ -78,17 +105,61 @@ setInterval(() => {
 function handlePlayerLeave(playerId: string) {
   const player = players.get(playerId);
   if (player) {
+    // Remove from lobby if in one
+    if (player.lobbyId) {
+      const lobby = lobbies.get(player.lobbyId);
+      if (lobby) {
+        lobby.players.delete(playerId);
+        io.to(`lobby:${player.lobbyId}`).emit('lobby:playerLeft', { playerId });
+        
+        // If host left, assign new host or close lobby
+        if (lobby.hostId === playerId) {
+          const remaining = Array.from(lobby.players.values());
+          if (remaining.length > 0) {
+            const newHost = remaining[0];
+            lobby.hostId = newHost.id;
+            lobby.hostName = newHost.name;
+            newHost.isHost = true;
+            io.to(`lobby:${player.lobbyId}`).emit('lobby:newHost', { hostId: newHost.id });
+          } else {
+            lobbies.delete(player.lobbyId);
+            io.emit('lobby:removed', { lobbyId: player.lobbyId });
+          }
+        }
+        
+        // Broadcast updated portal info
+        broadcastPortals();
+      }
+    }
+    
     // Remove from race if in one
     if (player.raceId) {
       const race = races.get(player.raceId);
       if (race) {
         race.players.delete(playerId);
-        io.to(player.raceId).emit('race:playerLeft', { playerId });
+        io.to(`race:${player.raceId}`).emit('race:playerLeft', { playerId });
       }
     }
+    
     players.delete(playerId);
     io.emit('player:left', { playerId });
   }
+}
+
+function broadcastPortals() {
+  const portals = Array.from(lobbies.values())
+    .filter(l => !l.raceStarted)
+    .map(l => ({
+      lobbyId: l.id,
+      hostName: l.hostName,
+      position: l.portalPosition,
+      playerCount: l.players.size
+    }));
+  io.emit('portals:update', { portals });
+}
+
+function getLobbyPlayers(lobby: Lobby): LobbyPlayer[] {
+  return Array.from(lobby.players.values());
 }
 
 io.on('connection', (socket: Socket) => {
@@ -103,18 +174,26 @@ io.on('connection', (socket: Socket) => {
     inRace: false,
     raceId: null,
     raceCheckpoints: 0,
+    lobbyId: null,
     lastUpdate: Date.now()
   };
   players.set(socket.id, playerState);
+  
+  // Get active portals
+  const portals = Array.from(lobbies.values())
+    .filter(l => !l.raceStarted)
+    .map(l => ({
+      lobbyId: l.id,
+      hostName: l.hostName,
+      position: l.portalPosition,
+      playerCount: l.players.size
+    }));
   
   // Send player their info and current world state
   socket.emit('welcome', {
     you: playerState,
     players: Array.from(players.values()).filter(p => p.id !== socket.id),
-    currentRace: currentOpenRace ? {
-      id: currentOpenRace,
-      playerCount: races.get(currentOpenRace)?.players.size || 0
-    } : null
+    portals
   });
   
   // Notify others
@@ -131,7 +210,6 @@ io.on('connection', (socket: Socket) => {
       player.rotation = data.rotation;
       player.lastUpdate = Date.now();
       
-      // Broadcast to others (throttled on client side)
       socket.broadcast.emit('player:moved', {
         id: socket.id,
         position: data.position,
@@ -140,63 +218,219 @@ io.on('connection', (socket: Socket) => {
     }
   });
   
-  // Handle joining a race
-  socket.on('race:join', (data: { mode: string }) => {
+  // ========== LOBBY SYSTEM ==========
+  
+  // Create a new race lobby (host creates portal)
+  socket.on('lobby:create', (data: { position: [number, number, number] }) => {
     const player = players.get(socket.id);
-    if (!player || player.inRace) return;
+    if (!player || player.lobbyId) return;
     
-    let race: RaceSession;
+    const lobbyId = generateId();
+    const lobby: Lobby = {
+      id: lobbyId,
+      hostId: socket.id,
+      hostName: player.name,
+      players: new Map(),
+      portalPosition: data.position,
+      createdAt: Date.now(),
+      countdown: null,
+      raceStarted: false
+    };
     
-    // Join existing open race or create new one
-    if (currentOpenRace && races.has(currentOpenRace)) {
-      race = races.get(currentOpenRace)!;
-    } else {
-      // Create new race
-      const raceId = generateId();
-      race = {
-        id: raceId,
-        players: new Set(),
-        startTime: Date.now(),
-        ringsSeed: Math.floor(Math.random() * 1000000),
-        isActive: true
-      };
-      races.set(raceId, race);
-      currentOpenRace = raceId;
-      
-      // Close race to new players after 30 seconds
-      setTimeout(() => {
-        if (currentOpenRace === raceId) {
-          currentOpenRace = null;
-          io.to(raceId).emit('race:closed'); // No more players can join
-        }
-      }, 30000);
+    // Add host to lobby
+    lobby.players.set(socket.id, {
+      id: socket.id,
+      name: player.name,
+      isHost: true,
+      ready: true
+    });
+    
+    lobbies.set(lobbyId, lobby);
+    player.lobbyId = lobbyId;
+    socket.join(`lobby:${lobbyId}`);
+    
+    // Notify host
+    socket.emit('lobby:created', {
+      lobbyId,
+      players: getLobbyPlayers(lobby),
+      portalPosition: data.position
+    });
+    
+    // Broadcast new portal to all players
+    broadcastPortals();
+    
+    console.log(`${player.name} created lobby ${lobbyId}`);
+  });
+  
+  // Join existing lobby via portal
+  socket.on('lobby:join', (data: { lobbyId: string }) => {
+    const player = players.get(socket.id);
+    if (!player || player.lobbyId) return;
+    
+    const lobby = lobbies.get(data.lobbyId);
+    if (!lobby || lobby.raceStarted) {
+      socket.emit('lobby:error', { message: 'Lobby not found or race already started' });
+      return;
     }
     
-    // Add player to race
-    race.players.add(socket.id);
-    player.inRace = true;
-    player.raceId = race.id;
-    player.raceCheckpoints = 0;
-    
-    socket.join(race.id);
-    
-    // Notify player they joined
-    socket.emit('race:joined', {
-      raceId: race.id,
-      seed: race.ringsSeed,
-      players: Array.from(race.players).map(pid => {
-        const p = players.get(pid);
-        return p ? { id: p.id, name: p.name, checkpoints: p.raceCheckpoints } : null;
-      }).filter(Boolean)
+    // Add player to lobby
+    lobby.players.set(socket.id, {
+      id: socket.id,
+      name: player.name,
+      isHost: false,
+      ready: false
     });
     
-    // Notify other race participants
-    socket.to(race.id).emit('race:playerJoined', {
-      player: { id: player.id, name: player.name, checkpoints: 0 }
+    player.lobbyId = data.lobbyId;
+    socket.join(`lobby:${data.lobbyId}`);
+    
+    // Notify joiner
+    socket.emit('lobby:joined', {
+      lobbyId: data.lobbyId,
+      players: getLobbyPlayers(lobby),
+      portalPosition: lobby.portalPosition,
+      isHost: false
     });
     
-    console.log(`${player.name} joined race ${race.id}`);
+    // Notify others in lobby
+    socket.to(`lobby:${data.lobbyId}`).emit('lobby:playerJoined', {
+      player: { id: socket.id, name: player.name, isHost: false, ready: false }
+    });
+    
+    // Broadcast updated portal count
+    broadcastPortals();
+    
+    console.log(`${player.name} joined lobby ${data.lobbyId}`);
   });
+  
+  // Player toggles ready state
+  socket.on('lobby:ready', (data: { ready: boolean }) => {
+    const player = players.get(socket.id);
+    if (!player || !player.lobbyId) return;
+    
+    const lobby = lobbies.get(player.lobbyId);
+    if (!lobby) return;
+    
+    const lobbyPlayer = lobby.players.get(socket.id);
+    if (lobbyPlayer) {
+      lobbyPlayer.ready = data.ready;
+      io.to(`lobby:${player.lobbyId}`).emit('lobby:playerReady', {
+        playerId: socket.id,
+        ready: data.ready
+      });
+    }
+  });
+  
+  // Host starts the race
+  socket.on('lobby:start', () => {
+    const player = players.get(socket.id);
+    if (!player || !player.lobbyId) return;
+    
+    const lobby = lobbies.get(player.lobbyId);
+    if (!lobby || lobby.hostId !== socket.id) return;
+    
+    // Start countdown
+    lobby.countdown = 3;
+    io.to(`lobby:${player.lobbyId}`).emit('lobby:countdown', { seconds: 3 });
+    
+    const countdownInterval = setInterval(() => {
+      if (!lobby.countdown) {
+        clearInterval(countdownInterval);
+        return;
+      }
+      
+      lobby.countdown--;
+      
+      if (lobby.countdown <= 0) {
+        clearInterval(countdownInterval);
+        
+        // Start the race!
+        lobby.raceStarted = true;
+        const raceId = lobby.id;
+        const seed = Math.floor(Math.random() * 1000000);
+        
+        // Create race session
+        const race: RaceSession = {
+          id: raceId,
+          players: new Set(),
+          startTime: Date.now(),
+          ringsSeed: seed,
+          isActive: true
+        };
+        races.set(raceId, race);
+        
+        // Move all lobby players to race
+        for (const [pid, lobbyPlayer] of lobby.players) {
+          const p = players.get(pid);
+          if (p) {
+            p.inRace = true;
+            p.raceId = raceId;
+            p.raceCheckpoints = 0;
+            p.lobbyId = null;
+            race.players.add(pid);
+            
+            const playerSocket = io.sockets.sockets.get(pid);
+            if (playerSocket) {
+              playerSocket.leave(`lobby:${lobby.id}`);
+              playerSocket.join(`race:${raceId}`);
+            }
+          }
+        }
+        
+        // Notify all players race is starting
+        io.to(`race:${raceId}`).emit('race:start', {
+          raceId,
+          seed,
+          players: Array.from(race.players).map(pid => {
+            const p = players.get(pid);
+            return p ? { id: p.id, name: p.name, checkpoints: 0 } : null;
+          }).filter(Boolean)
+        });
+        
+        // Remove portal
+        broadcastPortals();
+        
+        console.log(`Race ${raceId} started with ${race.players.size} players`);
+      } else {
+        io.to(`lobby:${player.lobbyId}`).emit('lobby:countdown', { seconds: lobby.countdown });
+      }
+    }, 1000);
+  });
+  
+  // Leave lobby
+  socket.on('lobby:leave', () => {
+    const player = players.get(socket.id);
+    if (!player || !player.lobbyId) return;
+    
+    const lobby = lobbies.get(player.lobbyId);
+    if (lobby) {
+      lobby.players.delete(socket.id);
+      socket.leave(`lobby:${player.lobbyId}`);
+      
+      io.to(`lobby:${player.lobbyId}`).emit('lobby:playerLeft', { playerId: socket.id });
+      
+      // If host left, assign new host
+      if (lobby.hostId === socket.id) {
+        const remaining = Array.from(lobby.players.values());
+        if (remaining.length > 0) {
+          const newHost = remaining[0];
+          lobby.hostId = newHost.id;
+          lobby.hostName = newHost.name;
+          newHost.isHost = true;
+          io.to(`lobby:${player.lobbyId}`).emit('lobby:newHost', { hostId: newHost.id });
+        } else {
+          lobbies.delete(player.lobbyId);
+          io.emit('lobby:removed', { lobbyId: player.lobbyId });
+        }
+      }
+      
+      broadcastPortals();
+    }
+    
+    player.lobbyId = null;
+  });
+  
+  // ========== RACE SYSTEM ==========
   
   // Handle checkpoint reached in race
   socket.on('race:checkpoint', (data: { checkpoints: number }) => {
@@ -205,14 +439,13 @@ io.on('connection', (socket: Socket) => {
     
     player.raceCheckpoints = data.checkpoints;
     
-    // Broadcast to race participants
-    io.to(player.raceId).emit('race:update', {
+    io.to(`race:${player.raceId}`).emit('race:update', {
       playerId: socket.id,
       checkpoints: data.checkpoints
     });
   });
   
-  // Handle leaving race (game over or quit)
+  // Handle leaving race (game over)
   socket.on('race:leave', () => {
     const player = players.get(socket.id);
     if (!player || !player.raceId) return;
@@ -220,13 +453,13 @@ io.on('connection', (socket: Socket) => {
     const race = races.get(player.raceId);
     if (race) {
       race.players.delete(socket.id);
-      socket.to(player.raceId).emit('race:playerLeft', { 
+      socket.to(`race:${player.raceId}`).emit('race:playerLeft', { 
         playerId: socket.id,
         finalCheckpoints: player.raceCheckpoints 
       });
     }
     
-    socket.leave(player.raceId);
+    socket.leave(`race:${player.raceId}`);
     player.inRace = false;
     player.raceId = null;
     player.raceCheckpoints = 0;
@@ -246,6 +479,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     players: players.size,
+    lobbies: lobbies.size,
     races: races.size 
   });
 });
@@ -254,4 +488,3 @@ const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
   console.log(`🐦 Bird Game server running on port ${PORT}`);
 });
-

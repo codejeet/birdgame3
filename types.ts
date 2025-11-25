@@ -75,6 +75,29 @@ export interface RaceParticipant {
   checkpoints: number;
 }
 
+// Race Lobby types
+export interface LobbyPlayer {
+  id: string;
+  name: string;
+  isHost: boolean;
+  ready: boolean;
+}
+
+export interface RacePortalData {
+  lobbyId: string;
+  hostName: string;
+  position: [number, number, number];
+  playerCount: number;
+}
+
+export interface LobbyState {
+  lobbyId: string | null;
+  isHost: boolean;
+  players: LobbyPlayer[];
+  portalPosition: [number, number, number] | null;
+  countdown: number | null; // null = not started, number = seconds remaining
+}
+
 export interface MultiplayerState {
   connected: boolean;
   playerId: string | null;
@@ -84,4 +107,7 @@ export interface MultiplayerState {
   raceId: string | null;
   raceSeed: number | null;
   raceParticipants: RaceParticipant[];
+  // Lobby state
+  lobby: LobbyState | null;
+  activePortals: RacePortalData[];
 }
