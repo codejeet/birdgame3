@@ -18,6 +18,7 @@ interface RingManagerProps {
     onShowModeSelect: () => void;
     onGameOver?: () => void;
     onCheckpoint?: (checkpoints: number) => void;
+    raceStartPosition?: [number, number, number] | null;
 }
 
 const RING_GAP = 80;
@@ -37,7 +38,7 @@ const RACE_FIRST_RING_TIME = 8.0;   // Time to reach the first ring
 // Reusable dummy for calculations
 const dummyObj = new Object3D();
 
-export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPosition, birdRotation, statsRef, audioRef, isPaused, targetRingRef, onShowModeSelect, onGameOver, onCheckpoint }) => {
+export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPosition, birdRotation, statsRef, audioRef, isPaused, targetRingRef, onShowModeSelect, onGameOver, onCheckpoint, raceStartPosition }) => {
     const controls = useControls();
     // State
     const [rings, setRings] = useState<RingData[]>([]);
@@ -171,6 +172,28 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                 raceCurrentGap.current = RACE_BASE_GAP;
                 statsRef.current.raceTimeRemaining = RACE_FIRST_RING_TIME;
                 statsRef.current.raceRingsCollected = 0;
+                
+                // Clear any existing rings
+                ringsRef.current = [];
+                nextRingId.current = 0;
+                
+                // Set path cursor to race start position if available
+                if (raceStartPosition) {
+                    pathCursor.current.set(raceStartPosition[0], raceStartPosition[1], raceStartPosition[2]);
+                    pathDirection.current.set(0, 0, 1); // Face forward (+Z)
+                    pathNoiseOffset.current = Math.random() * 100;
+                    
+                    // Spawn first ring immediately in front of start position
+                    const firstRingPos = pathCursor.current.clone().add(pathDirection.current.clone().multiplyScalar(50));
+                    spawnRing(firstRingPos, pathDirection.current, 'normal');
+                    spawnCount.current = 1;
+                } else {
+                    // Fallback to bird position
+                    pathCursor.current.copy(birdPosition);
+                    pathDirection.current.set(0, 0, 1).applyQuaternion(birdRotation).normalize();
+                }
+                
+                setRings([...ringsRef.current]);
             }
         }
         
@@ -220,7 +243,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         // 3. Path Generation (Only if active)
         if (gameActive.current) {
             const uncollectedCount = ringsRef.current.filter(r => !r.passed).length;
-            
+
             // In race mode, only spawn one ring at a time with increasing gap
             const maxUncollected = statsRef.current.ringGameMode === 'race' ? 1 : 10;
 
@@ -361,7 +384,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                     // In race mode, missing doesn't end the game - only time running out does
                     // In other modes, game over on miss
                     if (statsRef.current.ringGameMode !== 'race') {
-                        endGame(time);
+                    endGame(time);
                     } else {
                         // Reset combo on miss in race mode
                         statsRef.current.combo = 0;

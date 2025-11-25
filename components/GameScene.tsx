@@ -504,6 +504,7 @@ export const GameScene: React.FC = () => {
           onShowModeSelect={handleShowModeSelect}
           onGameOver={handleGameOver}
           onCheckpoint={multiplayer.updateCheckpoint}
+          raceStartPosition={multiplayer.raceStartPosition}
         />
 
         <WaterEffects
