@@ -6,8 +6,6 @@
 
 A 3D bird flying game built with React Three Fiber and Three.js.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1UHlCS9Yd8m5l5oqUq30s94s4zo_sKNG9
-
 ## Run Locally
 
 **Prerequisites:**  Node.js (v18 or higher)
