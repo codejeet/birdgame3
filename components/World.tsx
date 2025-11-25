@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Color, DoubleSide, Vector3 } from 'three';
-import { getTerrainHeight } from '../utils/terrain';
+import { getTerrainHeight, getTerrainColor } from '../utils/terrain';
 
 const CHUNK_SIZE = 200;
 const SEGMENTS = 32;
@@ -18,10 +18,6 @@ const Chunk = React.memo(({ xOffset, zOffset }: ChunkProps) => {
     const pos = [];
     const col = [];
     const indicesArr = [];
-    const color1 = new Color('#e2c08d');
-    const color2 = new Color('#5a8f45');
-    const color3 = new Color('#5d5d5d');
-    const color4 = new Color('#ffffff');
 
     for (let i = 0; i <= SEGMENTS; i++) {
       for (let j = 0; j <= SEGMENTS; j++) {
@@ -32,12 +28,7 @@ const Chunk = React.memo(({ xOffset, zOffset }: ChunkProps) => {
 
         pos.push(x, y, z);
 
-        const c = new Color();
-        if (y < 10) c.copy(color1).lerp(color2, (y + 10) / 20);
-        else if (y < 60) c.copy(color2).lerp(color3, (y - 10) / 50);
-        else if (y < 90) c.copy(color3).lerp(color4, (y - 60) / 30);
-        else c.copy(color4);
-
+        const c = getTerrainColor(x, z, y);
         col.push(c.r, c.g, c.b);
       }
     }

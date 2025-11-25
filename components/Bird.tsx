@@ -77,7 +77,7 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
         // Determine collision surface (Terrain or Water)
         const surfaceHeight = Math.max(terrainHeight, WATER_LEVEL);
         const distToSurface = position.current.y - surfaceHeight;
-        const floorLimit = surfaceHeight + 0.6; // Center offset for bird standing (0.5 radius + 0.1 buffer)
+        const floorLimit = surfaceHeight + 2; // Center offset for bird standing (0.5 radius + 0.1 buffer)
 
         // Audio Trigger Logic
         const now = state.clock.getElapsedTime();
