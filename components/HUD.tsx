@@ -60,12 +60,10 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
         const { score, altitude, speed, isRingGameActive, combo, currentMission, currentZoneLore, ringGameMode, raceTimeRemaining, raceRingsCollected } = statsRef.current;
 
         // Score
-        if (score !== lastScore) {
-          // If in multiplayer, show server score if available, otherwise show session score
-          const displayScore = multiplayer?.score !== undefined ? multiplayer.score : score;
-          
-          if (scoreRef.current) scoreRef.current.innerText = displayScore.toString();
-          lastScore = displayScore;
+        const targetScore = multiplayer?.score !== undefined ? multiplayer.score : score;
+        if (targetScore !== lastScore) {
+          if (scoreRef.current) scoreRef.current.innerText = targetScore.toString();
+          lastScore = targetScore;
         }
 
         // Alt
@@ -130,7 +128,8 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
         
         // Race Mode HUD Logic
         if (racePanelRef.current) {
-          const isRaceMode = isRingGameActive && ringGameMode === 'race';
+          // Check multiplayer.inRace first to ensure we hide if race ended server-side
+          const isRaceMode = (multiplayer?.inRace ?? false) && isRingGameActive && ringGameMode === 'race';
           if (isRaceMode !== lastRaceMode) {
             racePanelRef.current.style.opacity = isRaceMode ? '1' : '0';
             racePanelRef.current.style.transform = isRaceMode ? 'translateY(0)' : 'translateY(-20px)';

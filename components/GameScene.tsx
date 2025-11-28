@@ -289,14 +289,33 @@ export const GameScene: React.FC = () => {
   const handleGameOver = useCallback(() => {
     if (multiplayer.inRace) {
       multiplayer.leaveRace();
+      // Ensure local state is cleared immediately when we decide to leave/end
+      statsRef.current.isRingGameActive = false;
+      statsRef.current.ringGameMode = 'skyward'; // Reset mode to default
+      statsRef.current.raceRingsCollected = 0;
+      statsRef.current.raceTimeRemaining = 0;
     }
   }, [multiplayer]);
 
   const handleRaceWin = useCallback(() => {
     if (multiplayer.inRace) {
         multiplayer.winRace();
+        // Don't clear state here yet, wait for results screen? 
+        // Actually we want to keep flying or stop? 
+        // For now, let the victory screen handle the "Return to Lobby" which will clear state.
     }
   }, [multiplayer]);
+
+  // Clean up when race ends (triggered by multiplayer hook state change)
+  useEffect(() => {
+      // If we are locally in race mode but multiplayer says race ended
+      if (!multiplayer.inRace && statsRef.current.ringGameMode === 'race') {
+          statsRef.current.isRingGameActive = false;
+          statsRef.current.ringGameMode = 'skyward'; // Reset mode to default
+          statsRef.current.raceRingsCollected = 0;
+          statsRef.current.raceTimeRemaining = 0;
+      }
+  }, [multiplayer.inRace]);
 
   const handleCollect = useCallback(() => {
     statsRef.current.score += 1;

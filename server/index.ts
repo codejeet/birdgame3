@@ -54,6 +54,7 @@ interface RaceParticipantResult {
   checkpoints: number;
   finished: boolean;
   active: boolean;
+  lastCheckpointTime?: number;
 }
 
 interface RaceSession {
@@ -399,7 +400,8 @@ io.on('connection', (socket: Socket) => {
                 name: p.name,
                 checkpoints: 0,
                 finished: false,
-                active: true
+                active: true,
+                lastCheckpointTime: Date.now()
             });
             
             const playerSocket = io.sockets.sockets.get(pid);
@@ -487,6 +489,7 @@ io.on('connection', (socket: Socket) => {
         const participant = race.history.get(socket.id);
         if (participant) {
             participant.checkpoints = data.checkpoints;
+            participant.lastCheckpointTime = Date.now();
         }
     }
     
@@ -519,8 +522,68 @@ io.on('connection', (socket: Socket) => {
 
       // Check if race is empty or if only one player remains (Last Man Standing)
       if (race.players.size === 0) {
+          // RACE OVER - ALL FAILED / LEFT
+          // Calculate final standings using history of ALL participants
+          const allResults = Array.from(race.history.values());
+          
+          // Sort by checkpoints descending, then by time ascending (earlier is better)
+          allResults.sort((a, b) => {
+              if (b.checkpoints !== a.checkpoints) return b.checkpoints - a.checkpoints;
+              // Tie-break: if one finished and other didn't? (Unlikely here as all left, but handled)
+              // If checkpoints equal, who reached last checkpoint first wins tie
+              const timeA = a.lastCheckpointTime || 0;
+              const timeB = b.lastCheckpointTime || 0;
+              return timeA - timeB;
+          });
+          
+          // Assign ranks
+          const finalStandings = allResults.map((r, i) => ({
+              id: r.id,
+              name: r.name,
+              checkpoints: r.checkpoints,
+              rank: i + 1
+          }));
+          
+          // Award points to top 3 players
+          const pointsAward = [100, 50, 25]; // 1st, 2nd, 3rd
+
+          for (const standing of finalStandings) {
+              if (standing.rank <= 3) {
+                  const points = pointsAward[standing.rank - 1];
+                  const p = players.get(standing.id);
+                  // Player might be disconnected (p is undefined), but we should try to update persistent score if possible?
+                  // We can look up by ID in history? No, history doesn't have fingerprint.
+                  // But 'players' map might still have them if they just left race but not server?
+                  // If they disconnected fully, 'players' map won't have them.
+                  // We'd need to store fingerprint in history to persist offline.
+                  // For now, only award if online.
+                  
+                  if (p && p.fingerprint) {
+                      const currentScore = globalScores.get(p.fingerprint) || 0;
+                      const newScore = currentScore + points;
+                      globalScores.set(p.fingerprint, newScore);
+                      p.score = newScore;
+                      
+                      // Notify player of score update
+                      io.to(standing.id).emit('score:update', { score: newScore });
+                  }
+              }
+          }
+          
+          // Emit results to anyone still connected (even if not in race room, we can try iterating)
+          // But actually, socket.leave() hasn't happened for the current player yet.
+          // And previous leavers are gone from room.
+          // We can emit to specific socket IDs found in history if they are in 'players'.
+          for (const standing of finalStandings) {
+              const p = players.get(standing.id);
+              if (p) {
+                  io.to(standing.id).emit('race:ended', { results: finalStandings });
+              }
+          }
+
           races.delete(player.raceId);
-          console.log(`Race ${player.raceId} ended (empty)`);
+          console.log(`Race ${player.raceId} ended (All Finished/Failed).`);
+
       } else if (race.players.size === 1) {
           // Last Man Standing Logic: End race but determine winner by checkpoints
           const remainingPlayerId = Array.from(race.players)[0];
@@ -528,8 +591,13 @@ io.on('connection', (socket: Socket) => {
           // Calculate final standings using history of ALL participants
           const allResults = Array.from(race.history.values());
           
-          // Sort by checkpoints descending
-          allResults.sort((a, b) => b.checkpoints - a.checkpoints);
+          // Sort by checkpoints descending, then by time
+          allResults.sort((a, b) => {
+              if (b.checkpoints !== a.checkpoints) return b.checkpoints - a.checkpoints;
+              const timeA = a.lastCheckpointTime || 0;
+              const timeB = b.lastCheckpointTime || 0;
+              return timeA - timeB;
+          });
           
           // Assign ranks
           const finalStandings = allResults.map((r, i) => ({
@@ -557,19 +625,28 @@ io.on('connection', (socket: Socket) => {
             if (s) s.leave(`race:${race.id}`);
           }
           
-          // Award points to winner if they are the remaining player (or even if they left? Assuming points for rank 1)
-          // Since we can only reliably update active players via socket, we update globalScores
-          const winnerPlayer = players.get(winnerResult.id);
-          if (winnerPlayer) {
-             if (winnerPlayer.fingerprint) {
-                const currentScore = globalScores.get(winnerPlayer.fingerprint) || 0;
-                const newScore = currentScore + 100;
-                globalScores.set(winnerPlayer.fingerprint, newScore);
-                winnerPlayer.score = newScore;
-                
-                // Only emit if they are still connected
-                io.to(winnerResult.id).emit('score:update', { score: newScore });
-             }
+          // Award points to all participants (1 participation + placement bonus)
+          const pointsAward = [100, 50, 25]; // 1st, 2nd, 3rd
+
+          for (const standing of finalStandings) {
+              let points = 1; // Participation point
+              if (standing.rank <= 3) {
+                  points += pointsAward[standing.rank - 1];
+              }
+
+              const p = players.get(standing.id);
+              if (p) {
+                  if (p.fingerprint) {
+                      const currentScore = globalScores.get(p.fingerprint) || 0;
+                      const newScore = currentScore + points;
+                      globalScores.set(p.fingerprint, newScore);
+                      p.score = newScore;
+                      console.log(`Updated score for ${p.name}: ${currentScore} -> ${newScore}`);
+                  }
+                  
+                  // Notify player of score update
+                  io.to(standing.id).emit('score:update', { score: p.score });
+              }
           }
 
           races.delete(race.id);
@@ -602,11 +679,14 @@ io.on('connection', (socket: Socket) => {
         // Calculate final positions based on history
         const allResults = Array.from(race.history.values());
         
-        // Sort: Finished players first (should only be one if race ends immediately), then by checkpoints
+        // Sort: Finished players first (should only be one if race ends immediately), then by checkpoints, then time
         allResults.sort((a, b) => {
             if (a.finished && !b.finished) return -1;
             if (!a.finished && b.finished) return 1;
-            return b.checkpoints - a.checkpoints;
+            if (b.checkpoints !== a.checkpoints) return b.checkpoints - a.checkpoints;
+            const timeA = a.lastCheckpointTime || 0;
+            const timeB = b.lastCheckpointTime || 0;
+            return timeA - timeB;
         });
         
         const finalStandings = allResults.map((r, i) => ({
@@ -621,14 +701,28 @@ io.on('connection', (socket: Socket) => {
             results: finalStandings
         });
 
-        // Award points to winner (e.g. 100 points)
-        // Winner is the one who triggered this event (socket.id)
-        if (player.fingerprint) {
-            const currentScore = globalScores.get(player.fingerprint) || 0;
-            const newScore = currentScore + 100;
-            globalScores.set(player.fingerprint, newScore);
-            player.score = newScore;
-            io.to(socket.id).emit('score:update', { score: newScore });
+        // Award points to all participants (1 participation + placement bonus)
+        const pointsAward = [100, 50, 25]; // 1st, 2nd, 3rd
+
+        for (const standing of finalStandings) {
+            let points = 1; // Participation point
+            if (standing.rank <= 3) {
+                points += pointsAward[standing.rank - 1];
+            }
+
+            const p = players.get(standing.id);
+            if (p) {
+                if (p.fingerprint) {
+                    const currentScore = globalScores.get(p.fingerprint) || 0;
+                    const newScore = currentScore + points;
+                    globalScores.set(p.fingerprint, newScore);
+                    p.score = newScore;
+                    console.log(`Updated score for ${p.name}: ${currentScore} -> ${newScore}`);
+                }
+                
+                // Notify player of score update
+                io.to(standing.id).emit('score:update', { score: p.score });
+            }
         }
 
         // Clean up race players

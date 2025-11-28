@@ -63,7 +63,11 @@ export const VictoryScreen: React.FC<VictoryScreenProps> = ({ results, onClose }
           </div>
           
           <button
-            onClick={onClose}
+            onClick={() => {
+              onClose();
+              // Force reload to ensure clean state if needed, or rely on GameScene cleanup
+              // For now, just close, but GameScene should handle resetting mode
+            }}
             className="px-8 py-4 bg-yellow-500 hover:bg-yellow-400 text-black font-bold rounded-xl transition-all transform hover:scale-105 shadow-lg text-lg uppercase tracking-widest"
           >
             Return to Lobby

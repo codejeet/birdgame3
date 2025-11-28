@@ -47,11 +47,9 @@ const dummyObj = new Object3D();
 const RaceLine = React.memo(({ rings }: { rings: RingData[] }) => {
     // Only draw lines between active or upcoming rings
     const points = useMemo(() => {
-        // Filter passed rings that are far behind? No, keep path visible for context or just next few?
-        // Let's draw the full path of current rings
-        // But the rings array only holds *active* rings in the manager's view (some might be culled)
-        // Wait, ringsRef/rings state in Manager holds ~20 rings.
-        return rings.map(r => new Vector3(...r.position));
+        // Sort rings by ID to ensure correct path order
+        const sortedRings = [...rings].sort((a, b) => a.id - b.id);
+        return sortedRings.map(r => new Vector3(...r.position));
     }, [rings]);
 
     if (points.length < 2) return null;
