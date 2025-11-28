@@ -104,6 +104,7 @@ export function useMultiplayer(): MultiplayerHook {
     });
 
     socket.on('score:update', (data: { score: number }) => {
+        console.log(`🐦 Received score update: ${data.score}`);
         setPlayerScore(data.score);
     });
 

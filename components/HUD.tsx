@@ -39,6 +39,12 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
   const loreRef = useRef<HTMLDivElement>(null);
   const warningRef = useRef<HTMLDivElement>(null);
 
+  // Keep track of latest multiplayer props for the animation loop
+  const multiplayerRef = useRef(multiplayer);
+  useEffect(() => {
+      multiplayerRef.current = multiplayer;
+  }, [multiplayer]);
+
   useEffect(() => {
     let rAFId: number;
     let lastScore = -1;
@@ -60,7 +66,9 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
         const { score, altitude, speed, isRingGameActive, combo, currentMission, currentZoneLore, ringGameMode, raceTimeRemaining, raceRingsCollected } = statsRef.current;
 
         // Score
-        const targetScore = multiplayer?.score !== undefined ? multiplayer.score : score;
+        // Prioritize multiplayer score, fallback to local
+        const currentMultiplayer = multiplayerRef.current;
+        const targetScore = currentMultiplayer?.score ?? score;
         if (targetScore !== lastScore) {
           if (scoreRef.current) scoreRef.current.innerText = targetScore.toString();
           lastScore = targetScore;
@@ -129,7 +137,8 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
         // Race Mode HUD Logic
         if (racePanelRef.current) {
           // Check multiplayer.inRace first to ensure we hide if race ended server-side
-          const isRaceMode = (multiplayer?.inRace ?? false) && isRingGameActive && ringGameMode === 'race';
+          const currentMultiplayer = multiplayerRef.current;
+          const isRaceMode = (currentMultiplayer?.inRace ?? false) && isRingGameActive && ringGameMode === 'race';
           if (isRaceMode !== lastRaceMode) {
             racePanelRef.current.style.opacity = isRaceMode ? '1' : '0';
             racePanelRef.current.style.transform = isRaceMode ? 'translateY(0)' : 'translateY(-20px)';

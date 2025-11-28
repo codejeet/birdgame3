@@ -179,58 +179,8 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
 
                 // If in race mode, DO NOT reset game state completely, just respawn bird at start
                 if (statsRef.current.ringGameMode === 'race' && raceStartPosition) {
-                    // Reset race progress locally? No, that would be cheating/confusing if checkpoints are server tracked
-                    // Actually user requested "start them at the beginning of the race"
-                    // This implies resetting progress? Or just position?
-                    // Usually in racing games "respawn" puts you at last checkpoint.
-                    // But "Reset" might mean restart level.
-                    // Given the query "start them at the beginning of the race", it likely means full restart of position.
-                    // But if we reset rings, we desync from server race state?
-                    // Server tracks checkpoints.
-                    
-                    // Let's assume "Reset Position to Start" but keep race active.
-                    // However, if they fly back to start, they can't re-collect rings they already got?
-                    // Or maybe they want to restart the run?
-                    // If others are racing, restarting run puts you at disadvantage.
-                    
-                    // IMPORTANT: The query says "start them at the beginning of the race".
-                    // This aligns with Bird.tsx reset logic.
-                    // We should probably NOT clear rings if we want them to continue racing from start?
-                    // OR if they want to retry, maybe we should clear collected rings?
-                    // But `ringsRef` state is local.
-                    // Let's reset local rings so they can try again.
-                    // But checkpoints are server authoritative.
-                    
-                    // Simplest interpretation: Visual reset.
-                    // To support "re-flying" the race, we need to regenerate the rings.
-                    
-                    // Reset Rings to initial state
-                    ringsRef.current = [];
-                    nextRingId.current = 0;
-                    pathCursor.current.set(raceStartPosition[0], raceStartPosition[1], raceStartPosition[2]);
-                    pathDirection.current.set(0, 0, 1);
-                    if (raceSeed) {
-                        rngRef.current = new SeededRNG(raceSeed);
-                        pathNoiseOffset.current = (raceSeed % 1000) / 10.0;
-                    }
-                    
-                    // Spawn first ring again
-                    const firstRingPos = pathCursor.current.clone().add(new Vector3(0, 0, 40));
-                    pathCursor.current.copy(firstRingPos);
-                    spawnRing(firstRingPos, pathDirection.current, 'normal', true);
-                    spawnCount.current = 1;
-                    
-                    // Reset local stats
-                    statsRef.current.raceRingsCollected = 0;
-                    statsRef.current.combo = 0;
-                    
-                    // Notify server of reset? 
-                    // Ideally we should send checkpoint 0 update.
-                    onCheckpoint?.(0);
-                    
-                    setRings([...ringsRef.current]);
-                    lastSpawnTime.current = time;
-                    
+                   // Let Bird.tsx handle the teleport
+                   // We preserve ring state so player can continue or fly back
                 } else {
                     // Standard Mode Reset
                     gameActive.current = false;
@@ -258,10 +208,12 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         }
 
         // Sync gameActive ref with stats (handled by GameScene for mode select)
-        if (statsRef.current.isRingGameActive && !gameActive.current) {
-            gameActive.current = true;
-            spawnCount.current = 0;
-            
+        if (statsRef.current.isRingGameActive !== gameActive.current) {
+            if (statsRef.current.isRingGameActive) {
+                // START GAME
+                gameActive.current = true;
+                spawnCount.current = 0;
+                
                 // Initialize race mode
                 if (statsRef.current.ringGameMode === 'race') {
                     raceStartTime.current = time;
@@ -306,7 +258,16 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                     
                     setRings([...ringsRef.current]);
                 }
+            } else {
+                // STOP GAME (Externally triggered, e.g. race ended)
+                gameActive.current = false;
+                spawnCount.current = 0;
+                // Clear rings to allow starter ring to spawn
+                ringsRef.current = [];
+                setRings([]);
+                lastSpawnTime.current = time; // Reset spawn timer
             }
+        }
         
         // Race mode timer tick
         if (gameActive.current && statsRef.current.ringGameMode === 'race') {

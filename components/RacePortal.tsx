@@ -88,7 +88,10 @@ const Portal = React.memo(({
           onEnterPortal(portal.lobbyId);
         }
       } else {
-        hasTriggered.current = false;
+        // Reset trigger when player moves away
+        if (dist > PORTAL_COLLISION_RADIUS + 5) {
+            hasTriggered.current = false;
+        }
       }
     }
   });

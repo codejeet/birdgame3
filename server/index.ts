@@ -55,6 +55,7 @@ interface RaceParticipantResult {
   finished: boolean;
   active: boolean;
   lastCheckpointTime?: number;
+  fingerprint?: string; // Add fingerprint to history to award points even if disconnected
 }
 
 interface RaceSession {
@@ -401,7 +402,8 @@ io.on('connection', (socket: Socket) => {
                 checkpoints: 0,
                 finished: false,
                 active: true,
-                lastCheckpointTime: Date.now()
+                lastCheckpointTime: Date.now(),
+                fingerprint: p.fingerprint
             });
             
             const playerSocket = io.sockets.sockets.get(pid);
@@ -621,6 +623,8 @@ io.on('connection', (socket: Socket) => {
             winner.inRace = false;
             winner.raceId = null;
             winner.raceCheckpoints = 0;
+            // Also ensure lobbyId is clear just in case
+            winner.lobbyId = null;
             const s = io.sockets.sockets.get(winner.id);
             if (s) s.leave(`race:${race.id}`);
           }
@@ -634,18 +638,24 @@ io.on('connection', (socket: Socket) => {
                   points += pointsAward[standing.rank - 1];
               }
 
-              const p = players.get(standing.id);
-              if (p) {
-                  if (p.fingerprint) {
-                      const currentScore = globalScores.get(p.fingerprint) || 0;
-                      const newScore = currentScore + points;
-                      globalScores.set(p.fingerprint, newScore);
-                      p.score = newScore;
-                      console.log(`Updated score for ${p.name}: ${currentScore} -> ${newScore}`);
-                  }
-                  
-                  // Notify player of score update
-                  io.to(standing.id).emit('score:update', { score: p.score });
+              // Use history to get fingerprint if player is gone
+              // We need to find the participant result corresponding to this standing
+              // standings are mapped from results so IDs match
+              const participant = race.history.get(standing.id);
+              const fingerprint = participant?.fingerprint;
+
+              if (fingerprint) {
+                   const currentScore = globalScores.get(fingerprint) || 0;
+                   const newScore = currentScore + points;
+                   globalScores.set(fingerprint, newScore);
+                   console.log(`Updated persistent score for ${standing.name}: ${currentScore} -> ${newScore}`);
+                   
+                   // If player is online, update their state and notify
+                   const p = players.get(standing.id);
+                   if (p) {
+                       p.score = newScore;
+                       io.to(standing.id).emit('score:update', { score: newScore });
+                   }
               }
           }
 
@@ -701,29 +711,32 @@ io.on('connection', (socket: Socket) => {
             results: finalStandings
         });
 
-        // Award points to all participants (1 participation + placement bonus)
-        const pointsAward = [100, 50, 25]; // 1st, 2nd, 3rd
+          // Award points to all participants (1 participation + placement bonus)
+          const pointsAward = [100, 50, 25]; // 1st, 2nd, 3rd
 
-        for (const standing of finalStandings) {
-            let points = 1; // Participation point
-            if (standing.rank <= 3) {
-                points += pointsAward[standing.rank - 1];
-            }
+          for (const standing of finalStandings) {
+              let points = 1; // Participation point
+              if (standing.rank <= 3) {
+                  points += pointsAward[standing.rank - 1];
+              }
 
-            const p = players.get(standing.id);
-            if (p) {
-                if (p.fingerprint) {
-                    const currentScore = globalScores.get(p.fingerprint) || 0;
-                    const newScore = currentScore + points;
-                    globalScores.set(p.fingerprint, newScore);
-                    p.score = newScore;
-                    console.log(`Updated score for ${p.name}: ${currentScore} -> ${newScore}`);
-                }
-                
-                // Notify player of score update
-                io.to(standing.id).emit('score:update', { score: p.score });
-            }
-        }
+              const participant = race.history.get(standing.id);
+              const fingerprint = participant?.fingerprint;
+
+              if (fingerprint) {
+                   const currentScore = globalScores.get(fingerprint) || 0;
+                   const newScore = currentScore + points;
+                   globalScores.set(fingerprint, newScore);
+                   console.log(`Updated persistent score for ${standing.name}: ${currentScore} -> ${newScore}`);
+                   
+                   // If player is online, update their state and notify
+                   const p = players.get(standing.id);
+                   if (p) {
+                       p.score = newScore;
+                       io.to(standing.id).emit('score:update', { score: newScore });
+                   }
+              }
+          }
 
         // Clean up race players
         for (const pid of race.players) {
@@ -731,6 +744,7 @@ io.on('connection', (socket: Socket) => {
             if (p) {
                 p.inRace = false;
                 p.raceId = null;
+                p.lobbyId = null; // Ensure lobby ID is cleared
                 p.raceCheckpoints = 0;
                 const s = io.sockets.sockets.get(pid);
                 if (s) s.leave(`race:${race.id}`);
