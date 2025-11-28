@@ -13,14 +13,16 @@ interface BirdProps {
     playFlapSound: () => void;
     rotationRef?: React.MutableRefObject<Quaternion>;
     teleportTarget?: [number, number, number] | null;
+    teleportRotation?: [number, number, number, number] | null;
     frozen?: boolean;
+    raceStartPosition?: [number, number, number] | null;
 }
 
 type BirdMode = 'flying' | 'walking';
 
 const WATER_LEVEL = 10;
 
-export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rotationRef, teleportTarget, frozen }: BirdProps) => {
+export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rotationRef, teleportTarget, teleportRotation, frozen, raceStartPosition }: BirdProps) => {
     const birdRef = useRef<Group>(null);
     const { camera } = useThree();
     const controls = useControls();
@@ -64,11 +66,17 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
                 speed.current = 0;
                 velocity.current.set(0, 0, 0);
                 mode.current = 'flying';
+                
+                // If rotation is provided, apply it
+                if (teleportRotation) {
+                    quaternion.current.set(teleportRotation[0], teleportRotation[1], teleportRotation[2], teleportRotation[3]);
+                }
+                
                 lastTeleportTarget.current = targetKey;
                 onMove(position.current);
             }
         }
-    }, [teleportTarget, onMove]);
+    }, [teleportTarget, teleportRotation, onMove]);
 
     useFrame((state, delta) => {
         if (isPaused || !birdRef.current) return;
@@ -102,15 +110,22 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
 
         // Reset Logic
         if (reset) {
-            position.current.set(0, 350, 0);
+            // If in race mode, reset to race start position
+            if (raceStartPosition && statsRef.current.ringGameMode === 'race') {
+                position.current.set(raceStartPosition[0], raceStartPosition[1], raceStartPosition[2]);
+                quaternion.current.set(0, 0, 0, 1); // Face +Z
+            } else {
+                position.current.set(0, 350, 0);
+                quaternion.current.identity();
+                // Recalculate terrain height to ensure we don't spawn inside a mountain if the terrain seed is different or if 0,0 is high
+                const terrainY = getTerrainHeight(0, 0);
+                const safeY = Math.max(terrainY, WATER_LEVEL);
+                if (position.current.y < safeY + 50) position.current.y = safeY + 100;
+            }
+            
             speed.current = 0.5;
             velocity.current.set(0, 0, 0);
-            quaternion.current.identity();
             mode.current = 'flying';
-            // Recalculate terrain height to ensure we don't spawn inside a mountain if the terrain seed is different or if 0,0 is high
-            const terrainY = getTerrainHeight(0, 0);
-            const safeY = Math.max(terrainY, WATER_LEVEL);
-            if (position.current.y < safeY + 50) position.current.y = safeY + 100;
         }
 
         // Cooldown management

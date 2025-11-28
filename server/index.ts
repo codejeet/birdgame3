@@ -25,6 +25,9 @@ interface PlayerState {
   raceCheckpoints: number;
   lobbyId: string | null;
   lastUpdate: number;
+  // Persistent tracking (simple)
+  score: number;
+  fingerprint?: string; // Could be IP + UserAgent hash or similar
 }
 
 interface LobbyPlayer {
@@ -45,9 +48,18 @@ interface Lobby {
   raceStarted: boolean;
 }
 
+interface RaceParticipantResult {
+  id: string;
+  name: string;
+  checkpoints: number;
+  finished: boolean;
+  active: boolean;
+}
+
 interface RaceSession {
   id: string;
-  players: Set<string>;
+  players: Set<string>; // Active socket IDs
+  history: Map<string, RaceParticipantResult>; // All participants
   startTime: number;
   ringsSeed: number;
   isActive: boolean;
@@ -57,6 +69,8 @@ interface RaceSession {
 const players = new Map<string, PlayerState>();
 const lobbies = new Map<string, Lobby>();
 const races = new Map<string, RaceSession>();
+// Simple persistent score store: Map<Fingerprint, Score>
+const globalScores = new Map<string, number>();
 
 // Generate unique IDs
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -166,6 +180,13 @@ io.on('connection', (socket: Socket) => {
   console.log(`Player connected: ${socket.id}`);
   
   // Initialize player
+  // Use IP as simple fingerprint for now (in a real app, use a proper session/auth)
+  const ip = socket.handshake.address;
+  const userAgent = socket.handshake.headers['user-agent'] || '';
+  const fingerprint = `${ip}-${userAgent}`;
+  
+  const savedScore = globalScores.get(fingerprint) || 0;
+
   const playerState: PlayerState = {
     id: socket.id,
     name: generateBirdName(),
@@ -175,7 +196,9 @@ io.on('connection', (socket: Socket) => {
     raceId: null,
     raceCheckpoints: 0,
     lobbyId: null,
-    lastUpdate: Date.now()
+    lastUpdate: Date.now(),
+    score: savedScore,
+    fingerprint
   };
   players.set(socket.id, playerState);
   
@@ -353,6 +376,7 @@ io.on('connection', (socket: Socket) => {
         const race: RaceSession = {
           id: raceId,
           players: new Set(),
+          history: new Map(),
           startTime: Date.now(),
           ringsSeed: seed,
           isActive: true
@@ -369,6 +393,15 @@ io.on('connection', (socket: Socket) => {
             p.lobbyId = null;
             race.players.add(pid);
             
+            // Add to history
+            race.history.set(pid, {
+                id: pid,
+                name: p.name,
+                checkpoints: 0,
+                finished: false,
+                active: true
+            });
+            
             const playerSocket = io.sockets.sockets.get(pid);
             if (playerSocket) {
               playerSocket.leave(`lobby:${lobby.id}`);
@@ -378,10 +411,12 @@ io.on('connection', (socket: Socket) => {
         }
         
         // Calculate start position (in front of portal, facing forward)
+        // Ensure portal position is valid before using
+        const portalPos = lobby.portalPosition || [0, 350, 0];
         const startPosition: [number, number, number] = [
-          lobby.portalPosition[0],
-          lobby.portalPosition[1],
-          lobby.portalPosition[2] + 100  // 100 units in front of portal
+          portalPos[0],
+          portalPos[1],
+          portalPos[2] + 100  // 100 units in front of portal
         ];
         
         // Notify all players race is starting
@@ -447,6 +482,14 @@ io.on('connection', (socket: Socket) => {
     
     player.raceCheckpoints = data.checkpoints;
     
+    const race = races.get(player.raceId);
+    if (race) {
+        const participant = race.history.get(socket.id);
+        if (participant) {
+            participant.checkpoints = data.checkpoints;
+        }
+    }
+    
     io.to(`race:${player.raceId}`).emit('race:update', {
       playerId: socket.id,
       checkpoints: data.checkpoints
@@ -461,10 +504,77 @@ io.on('connection', (socket: Socket) => {
     const race = races.get(player.raceId);
     if (race) {
       race.players.delete(socket.id);
+      
+      // Mark as inactive in history but keep checkpoints
+      const participant = race.history.get(socket.id);
+      if (participant) {
+          participant.active = false;
+          participant.checkpoints = player.raceCheckpoints;
+      }
+
       socket.to(`race:${player.raceId}`).emit('race:playerLeft', { 
         playerId: socket.id,
         finalCheckpoints: player.raceCheckpoints 
       });
+
+      // Check if race is empty or if only one player remains (Last Man Standing)
+      if (race.players.size === 0) {
+          races.delete(player.raceId);
+          console.log(`Race ${player.raceId} ended (empty)`);
+      } else if (race.players.size === 1) {
+          // Last Man Standing Logic: End race but determine winner by checkpoints
+          const remainingPlayerId = Array.from(race.players)[0];
+          
+          // Calculate final standings using history of ALL participants
+          const allResults = Array.from(race.history.values());
+          
+          // Sort by checkpoints descending
+          allResults.sort((a, b) => b.checkpoints - a.checkpoints);
+          
+          // Assign ranks
+          const finalStandings = allResults.map((r, i) => ({
+              id: r.id,
+              name: r.name,
+              checkpoints: r.checkpoints,
+              rank: i + 1
+          }));
+          
+          // Identify winner (Rank 1)
+          const winnerResult = finalStandings[0];
+          
+          // Emit results to the remaining player
+          io.to(`race:${race.id}`).emit('race:ended', {
+              results: finalStandings
+          });
+          
+          // Cleanup remaining player
+          const winner = players.get(remainingPlayerId);
+          if (winner) {
+            winner.inRace = false;
+            winner.raceId = null;
+            winner.raceCheckpoints = 0;
+            const s = io.sockets.sockets.get(winner.id);
+            if (s) s.leave(`race:${race.id}`);
+          }
+          
+          // Award points to winner if they are the remaining player (or even if they left? Assuming points for rank 1)
+          // Since we can only reliably update active players via socket, we update globalScores
+          const winnerPlayer = players.get(winnerResult.id);
+          if (winnerPlayer) {
+             if (winnerPlayer.fingerprint) {
+                const currentScore = globalScores.get(winnerPlayer.fingerprint) || 0;
+                const newScore = currentScore + 100;
+                globalScores.set(winnerPlayer.fingerprint, newScore);
+                winnerPlayer.score = newScore;
+                
+                // Only emit if they are still connected
+                io.to(winnerResult.id).emit('score:update', { score: newScore });
+             }
+          }
+
+          races.delete(race.id);
+          console.log(`Race ${race.id} ended (Last Man Standing). Winner by points: ${winnerResult.name}`);
+      }
     }
     
     socket.leave(`race:${player.raceId}`);
@@ -473,6 +583,68 @@ io.on('connection', (socket: Socket) => {
     player.raceCheckpoints = 0;
     
     console.log(`${player.name} left race`);
+  });
+
+  // Handle race win
+  socket.on('race:win', () => {
+    const player = players.get(socket.id);
+    if (!player || !player.raceId) return;
+
+    const race = races.get(player.raceId);
+    if (race) {
+        // Mark winner as finished in history
+        const participant = race.history.get(socket.id);
+        if (participant) {
+            participant.finished = true;
+            participant.checkpoints = 999999; // Force highest value for winner
+        }
+
+        // Calculate final positions based on history
+        const allResults = Array.from(race.history.values());
+        
+        // Sort: Finished players first (should only be one if race ends immediately), then by checkpoints
+        allResults.sort((a, b) => {
+            if (a.finished && !b.finished) return -1;
+            if (!a.finished && b.finished) return 1;
+            return b.checkpoints - a.checkpoints;
+        });
+        
+        const finalStandings = allResults.map((r, i) => ({
+            id: r.id,
+            name: r.name,
+            checkpoints: r.finished ? 20 : r.checkpoints, // Display 20/real count in UI
+            rank: i + 1
+        }));
+
+        // End race for everyone with results
+        io.to(`race:${player.raceId}`).emit('race:ended', {
+            results: finalStandings
+        });
+
+        // Award points to winner (e.g. 100 points)
+        // Winner is the one who triggered this event (socket.id)
+        if (player.fingerprint) {
+            const currentScore = globalScores.get(player.fingerprint) || 0;
+            const newScore = currentScore + 100;
+            globalScores.set(player.fingerprint, newScore);
+            player.score = newScore;
+            io.to(socket.id).emit('score:update', { score: newScore });
+        }
+
+        // Clean up race players
+        for (const pid of race.players) {
+            const p = players.get(pid);
+            if (p) {
+                p.inRace = false;
+                p.raceId = null;
+                p.raceCheckpoints = 0;
+                const s = io.sockets.sockets.get(pid);
+                if (s) s.leave(`race:${race.id}`);
+            }
+        }
+        races.delete(race.id);
+        console.log(`Race ${race.id} won by ${player.name}`);
+    }
   });
   
   // Handle disconnect

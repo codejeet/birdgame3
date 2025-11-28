@@ -14,6 +14,7 @@ import { WaterEffects } from './WaterEffects';
 import { AudioController, AudioHandle } from './AudioController';
 import { OtherPlayers } from './OtherPlayers';
 import { RacePortals } from './RacePortal';
+import { VictoryScreen } from './VictoryScreen';
 import { useMultiplayer } from '../utils/multiplayer';
 import { GameStats, RingGameMode } from '../types';
 
@@ -113,6 +114,55 @@ const NavArrow = React.memo(({ birdPos, targetRef }: { birdPos: Vector3, targetR
   );
 });
 
+// Waypoint Arrow to nearest Lobby
+const LobbyArrow = React.memo(({ birdPos, portals }: { birdPos: Vector3, portals: any[] }) => {
+  const groupRef = useRef<Group>(null);
+  const targetRef = useRef<Vector3 | null>(null);
+
+  useFrame((state) => {
+    if (!groupRef.current) return;
+
+    if (!portals || portals.length === 0) {
+      groupRef.current.visible = false;
+      return;
+    }
+
+    // Find closest portal
+    let minDist = Infinity;
+    let closestPortal = null;
+
+    portals.forEach(p => {
+      const pos = new Vector3(p.position[0], p.position[1], p.position[2]);
+      const dist = pos.distanceTo(birdPos);
+      if (dist < minDist) {
+        minDist = dist;
+        closestPortal = pos;
+      }
+    });
+
+    if (closestPortal) {
+      targetRef.current = closestPortal;
+      groupRef.current.visible = true;
+      
+      // Position above bird
+      const arrowPos = birdPos.clone().add(new Vector3(0, 8, 0));
+      groupRef.current.position.lerp(arrowPos, 0.2);
+      groupRef.current.lookAt(closestPortal);
+    } else {
+        groupRef.current.visible = false;
+    }
+  });
+
+  return (
+    <group ref={groupRef}>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <coneGeometry args={[0.8, 2, 4]} />
+        <meshStandardMaterial color="#00ff00" emissive="#00ff00" emissiveIntensity={2} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+});
+
 export const GameScene: React.FC = () => {
   const statsRef = useRef<GameStats>({
     score: 0,
@@ -139,6 +189,7 @@ export const GameScene: React.FC = () => {
   const [showModeSelect, setShowModeSelect] = useState(false);
   const [pendingRacePortalPosition, setPendingRacePortalPosition] = useState<[number, number, number] | null>(null);
   const [teleportTarget, setTeleportTarget] = useState<[number, number, number] | null>(null);
+  const [teleportRotation, setTeleportRotation] = useState<[number, number, number, number] | null>(null);
 
   const audioRef = useRef<AudioHandle>(null);
   
@@ -204,25 +255,23 @@ export const GameScene: React.FC = () => {
   
   // When race actually starts from lobby
   useEffect(() => {
-    if (multiplayer.inRace && !statsRef.current.isRingGameActive) {
+    // Wait for BOTH inRace and raceStartPosition to be available before initializing
+    if (multiplayer.inRace && !statsRef.current.isRingGameActive && multiplayer.raceStartPosition) {
       statsRef.current.ringGameMode = 'race';
       statsRef.current.isRingGameActive = true;
       document.body.requestPointerLock();
       audioRef.current?.playGameStart();
       
       // Teleport to race start position (in front of where the portal was)
-      if (multiplayer.raceStartPosition) {
-        setTeleportTarget(multiplayer.raceStartPosition);
-      } else {
-        // Fallback: move forward from current position
-        const pos = birdPosRef.current;
-        const forward = new Vector3(0, 0, 1).applyQuaternion(birdRotRef.current);
-        const startPos = pos.clone().add(forward.multiplyScalar(100));
-        setTeleportTarget([startPos.x, startPos.y, startPos.z]);
-      }
+      setTeleportTarget(multiplayer.raceStartPosition);
+      // Force rotation to face +Z (same as RingManager's assumption)
+      setTeleportRotation([0, 0, 0, 1]);
       
       // Clear teleport after a short delay so it doesn't interfere with gameplay
-      setTimeout(() => setTeleportTarget(null), 500);
+      setTimeout(() => {
+        setTeleportTarget(null);
+        setTeleportRotation(null);
+      }, 500);
     }
   }, [multiplayer.inRace, multiplayer.raceStartPosition]);
 
@@ -240,6 +289,12 @@ export const GameScene: React.FC = () => {
   const handleGameOver = useCallback(() => {
     if (multiplayer.inRace) {
       multiplayer.leaveRace();
+    }
+  }, [multiplayer]);
+
+  const handleRaceWin = useCallback(() => {
+    if (multiplayer.inRace) {
+        multiplayer.winRace();
     }
   }, [multiplayer]);
 
@@ -301,7 +356,10 @@ export const GameScene: React.FC = () => {
           playerName: multiplayer.playerName,
           playerCount: multiplayer.players.size,
           inRace: multiplayer.inRace,
-          raceParticipants: multiplayer.raceParticipants
+          raceParticipants: multiplayer.raceParticipants,
+          score: multiplayer.playerScore,
+          activePortals: multiplayer.activePortals,
+          onJoinLobby: handleEnterPortal
         }}
       />
       <AudioController ref={audioRef} isPaused={isPaused} />
@@ -444,7 +502,14 @@ export const GameScene: React.FC = () => {
         </div>
       )}
 
-      {!isPaused && !isPointerLocked && !showModeSelect && !/Mobi|Android/i.test(navigator.userAgent) && (
+      {multiplayer.raceResults && (
+        <VictoryScreen 
+          results={multiplayer.raceResults.map(r => ({ ...r, isLocal: r.id === multiplayer.playerId }))}
+          onClose={() => multiplayer.clearRaceResults()}
+        />
+      )}
+
+      {!isPaused && !isPointerLocked && !showModeSelect && !multiplayer.raceResults && !/Mobi|Android/i.test(navigator.userAgent) && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/20 pointer-events-none">
           <div className="bg-black/50 backdrop-blur-sm px-8 py-4 rounded-full border border-white/10 text-white font-bold tracking-widest animate-pulse">
             CLICK TO CAPTURE MOUSE CURSOR
@@ -485,7 +550,9 @@ export const GameScene: React.FC = () => {
           playFlapSound={handleFlap}
           rotationRef={birdRotRef}
           teleportTarget={teleportTarget}
+          teleportRotation={teleportRotation}
           frozen={isInLobby}
+          raceStartPosition={multiplayer.inRace ? multiplayer.raceStartPosition : null}
         />
 
         <Collectibles
@@ -503,8 +570,11 @@ export const GameScene: React.FC = () => {
           targetRingRef={targetRingRef}
           onShowModeSelect={handleShowModeSelect}
           onGameOver={handleGameOver}
+          onRaceWin={handleRaceWin}
           onCheckpoint={multiplayer.updateCheckpoint}
           raceStartPosition={multiplayer.raceStartPosition}
+          raceSeed={multiplayer.raceSeed}
+          clearRings={isInLobby}
         />
 
         <WaterEffects
@@ -513,6 +583,11 @@ export const GameScene: React.FC = () => {
         />
 
         <NavArrow birdPos={birdPosRef.current} targetRef={targetRingRef} />
+        
+        {/* Lobby Waypoint Arrow */}
+        {!multiplayer.inRace && !isInLobby && (
+            <LobbyArrow birdPos={birdPosRef.current} portals={multiplayer.activePortals} />
+        )}
         
         {/* Other multiplayer birds */}
         <OtherPlayers 

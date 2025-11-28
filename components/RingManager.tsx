@@ -1,10 +1,11 @@
 
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Vector3, Quaternion, Euler, Color, Object3D } from 'three';
 import { RingData, GameStats } from '../types';
 import { AudioHandle } from './AudioController';
 import { noise2D } from '../utils/noise';
+import { SeededRNG } from '../utils/rng';
 import { getTerrainHeight } from '../utils/terrain';
 import { useControls } from '../utils/controls';
 
@@ -17,8 +18,11 @@ interface RingManagerProps {
     targetRingRef: React.MutableRefObject<Vector3 | null>;
     onShowModeSelect: () => void;
     onGameOver?: () => void;
+    onRaceWin?: () => void;
     onCheckpoint?: (checkpoints: number) => void;
     raceStartPosition?: [number, number, number] | null;
+    raceSeed?: number | null;
+    clearRings?: boolean;
 }
 
 const RING_GAP = 80;
@@ -33,12 +37,41 @@ const RACE_GAP_INCREMENT = 8;       // How much farther each ring gets
 const RACE_MAX_GAP = 180;           // Maximum distance cap (reached around ring 12-13)
 const RACE_TIME_PER_DISTANCE = 0.08; // Seconds per unit of distance
 const RACE_BASE_TIME_BONUS = 3.0;   // Base seconds for each ring
-const RACE_FIRST_RING_TIME = 8.0;   // Time to reach the first ring
+const RACE_FIRST_RING_TIME = 30.0;   // Time to reach the first ring
+const RACE_TOTAL_RINGS = 20;
 
 // Reusable dummy for calculations
 const dummyObj = new Object3D();
 
-export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPosition, birdRotation, statsRef, audioRef, isPaused, targetRingRef, onShowModeSelect, onGameOver, onCheckpoint, raceStartPosition }) => {
+// Race Line Component
+const RaceLine = React.memo(({ rings }: { rings: RingData[] }) => {
+    // Only draw lines between active or upcoming rings
+    const points = useMemo(() => {
+        // Filter passed rings that are far behind? No, keep path visible for context or just next few?
+        // Let's draw the full path of current rings
+        // But the rings array only holds *active* rings in the manager's view (some might be culled)
+        // Wait, ringsRef/rings state in Manager holds ~20 rings.
+        return rings.map(r => new Vector3(...r.position));
+    }, [rings]);
+
+    if (points.length < 2) return null;
+
+    return (
+        <line>
+            <bufferGeometry>
+                <bufferAttribute
+                    attach="attributes-position"
+                    count={points.length}
+                    array={new Float32Array(points.flatMap(p => [p.x, p.y, p.z]))}
+                    itemSize={3}
+                />
+            </bufferGeometry>
+            <lineBasicMaterial color="#ffff00" opacity={0.5} transparent linewidth={2} />
+        </line>
+    );
+});
+
+export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPosition, birdRotation, statsRef, audioRef, isPaused, targetRingRef, onShowModeSelect, onGameOver, onRaceWin, onCheckpoint, raceStartPosition, raceSeed, clearRings }) => {
     const controls = useControls();
     // State
     const [rings, setRings] = useState<RingData[]>([]);
@@ -50,6 +83,17 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
     const resetProcessed = useRef(false);
     const spawnCount = useRef(0);
     const lastSpawnTime = useRef(-100); // Allow immediate spawn at start
+    const rngRef = useRef<SeededRNG>(new SeededRNG(123)); // Default seed
+
+    // Handle external clear signal (e.g. entering lobby)
+    useEffect(() => {
+        if (clearRings) {
+            ringsRef.current = [];
+            setRings([]);
+            gameActive.current = false;
+            statsRef.current.isRingGameActive = false;
+        }
+    }, [clearRings]);
 
     // Race mode state
     const raceStartTime = useRef(0);
@@ -62,12 +106,12 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
     const pathNoiseOffset = useRef(0);
 
     // Helper to create a ring
-    const spawnRing = (pos: Vector3, dir: Vector3, type: RingData['type']) => {
+    const spawnRing = (pos: Vector3, dir: Vector3, type: RingData['type'], forceHeight: boolean = false) => {
         // Ensure strictly above water (water level is 10) and Terrain
         const tH = getTerrainHeight(pos.x, pos.z);
         const safeY = Math.max(tH, 10) + 25; // Minimum clearance
 
-        if (pos.y < safeY) pos.y = safeY;
+        if (!forceHeight && pos.y < safeY) pos.y = safeY;
 
         // Fix Orientation: Make the ring look at the direction of travel so the hole aligns with it.
         dummyObj.position.copy(pos);
@@ -130,29 +174,84 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         if (isPaused) return;
         const time = state.clock.getElapsedTime();
 
-        // Handle Reset
+                // Handle Reset
         if (controls.current.reset) {
             if (!resetProcessed.current) {
                 resetProcessed.current = true;
 
-                // Reset Game State
-                gameActive.current = false;
-                statsRef.current.isRingGameActive = false;
-                statsRef.current.combo = 0;
-                spawnCount.current = 0;
+                // If in race mode, DO NOT reset game state completely, just respawn bird at start
+                if (statsRef.current.ringGameMode === 'race' && raceStartPosition) {
+                    // Reset race progress locally? No, that would be cheating/confusing if checkpoints are server tracked
+                    // Actually user requested "start them at the beginning of the race"
+                    // This implies resetting progress? Or just position?
+                    // Usually in racing games "respawn" puts you at last checkpoint.
+                    // But "Reset" might mean restart level.
+                    // Given the query "start them at the beginning of the race", it likely means full restart of position.
+                    // But if we reset rings, we desync from server race state?
+                    // Server tracks checkpoints.
+                    
+                    // Let's assume "Reset Position to Start" but keep race active.
+                    // However, if they fly back to start, they can't re-collect rings they already got?
+                    // Or maybe they want to restart the run?
+                    // If others are racing, restarting run puts you at disadvantage.
+                    
+                    // IMPORTANT: The query says "start them at the beginning of the race".
+                    // This aligns with Bird.tsx reset logic.
+                    // We should probably NOT clear rings if we want them to continue racing from start?
+                    // OR if they want to retry, maybe we should clear collected rings?
+                    // But `ringsRef` state is local.
+                    // Let's reset local rings so they can try again.
+                    // But checkpoints are server authoritative.
+                    
+                    // Simplest interpretation: Visual reset.
+                    // To support "re-flying" the race, we need to regenerate the rings.
+                    
+                    // Reset Rings to initial state
+                    ringsRef.current = [];
+                    nextRingId.current = 0;
+                    pathCursor.current.set(raceStartPosition[0], raceStartPosition[1], raceStartPosition[2]);
+                    pathDirection.current.set(0, 0, 1);
+                    if (raceSeed) {
+                        rngRef.current = new SeededRNG(raceSeed);
+                        pathNoiseOffset.current = (raceSeed % 1000) / 10.0;
+                    }
+                    
+                    // Spawn first ring again
+                    const firstRingPos = pathCursor.current.clone().add(new Vector3(0, 0, 40));
+                    pathCursor.current.copy(firstRingPos);
+                    spawnRing(firstRingPos, pathDirection.current, 'normal', true);
+                    spawnCount.current = 1;
+                    
+                    // Reset local stats
+                    statsRef.current.raceRingsCollected = 0;
+                    statsRef.current.combo = 0;
+                    
+                    // Notify server of reset? 
+                    // Ideally we should send checkpoint 0 update.
+                    onCheckpoint?.(0);
+                    
+                    setRings([...ringsRef.current]);
+                    lastSpawnTime.current = time;
+                    
+                } else {
+                    // Standard Mode Reset
+                    gameActive.current = false;
+                    statsRef.current.isRingGameActive = false;
+                    statsRef.current.combo = 0;
+                    spawnCount.current = 0;
 
-                // Clear rings
-                ringsRef.current = [];
+                    // Clear rings
+                    ringsRef.current = [];
 
-                // Force spawn starter ring at fixed start position aligned with Bird.tsx reset
-                // Bird resets to (0, 350, 0) facing +Z
-                const resetStartPos = new Vector3(0, 350, 200);
-                const resetForward = new Vector3(0, 0, 1);
+                    // Force spawn starter ring at fixed start position
+                    const resetStartPos = new Vector3(0, 350, 200);
+                    const resetForward = new Vector3(0, 0, 1);
 
-                nextRingId.current = 0;
-                spawnRing(resetStartPos, resetForward, 'starter');
-                setRings([...ringsRef.current]);
-                lastSpawnTime.current = time;
+                    nextRingId.current = 0;
+                    spawnRing(resetStartPos, resetForward, 'starter');
+                    setRings([...ringsRef.current]);
+                    lastSpawnTime.current = time;
+                }
             }
             // While reset is held, do not process other logic
             return;
@@ -165,37 +264,51 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
             gameActive.current = true;
             spawnCount.current = 0;
             
-            // Initialize race mode
-            if (statsRef.current.ringGameMode === 'race') {
-                raceStartTime.current = time;
-                lastRaceUpdateTime.current = time;
-                raceCurrentGap.current = RACE_BASE_GAP;
-                statsRef.current.raceTimeRemaining = RACE_FIRST_RING_TIME;
-                statsRef.current.raceRingsCollected = 0;
-                
-                // Clear any existing rings
-                ringsRef.current = [];
-                nextRingId.current = 0;
-                
-                // Set path cursor to race start position if available
-                if (raceStartPosition) {
-                    pathCursor.current.set(raceStartPosition[0], raceStartPosition[1], raceStartPosition[2]);
-                    pathDirection.current.set(0, 0, 1); // Face forward (+Z)
-                    pathNoiseOffset.current = Math.random() * 100;
+                // Initialize race mode
+                if (statsRef.current.ringGameMode === 'race') {
+                    raceStartTime.current = time;
+                    lastRaceUpdateTime.current = time;
+                    raceCurrentGap.current = RACE_BASE_GAP;
+                    statsRef.current.raceTimeRemaining = RACE_FIRST_RING_TIME;
+                    statsRef.current.raceRingsCollected = 0;
                     
-                    // Spawn first ring immediately in front of start position
-                    const firstRingPos = pathCursor.current.clone().add(pathDirection.current.clone().multiplyScalar(50));
-                    spawnRing(firstRingPos, pathDirection.current, 'normal');
-                    spawnCount.current = 1;
-                } else {
-                    // Fallback to bird position
-                    pathCursor.current.copy(birdPosition);
-                    pathDirection.current.set(0, 0, 1).applyQuaternion(birdRotation).normalize();
+                    // Clear any existing rings
+                    ringsRef.current = [];
+                    nextRingId.current = 0;
+                    
+                    // Initialize Seeded RNG if raceSeed provided
+                    if (raceSeed) {
+                        rngRef.current = new SeededRNG(raceSeed);
+                    }
+                    
+                    // Set path cursor to race start position if available
+                    if (raceStartPosition) {
+                        // Set cursor exactly to start position
+                        pathCursor.current.set(raceStartPosition[0], raceStartPosition[1], raceStartPosition[2]);
+                        
+                        // Reset direction to face +Z
+                        pathDirection.current.set(0, 0, 1); 
+                        // Use seed for deterministic path noise
+                        pathNoiseOffset.current = raceSeed ? (raceSeed % 1000) / 10.0 : Math.random() * 100;
+                        
+                        // Calculate first ring position: 40 units DIRECTLY ahead (+Z)
+                        // No noise, no fancy math, just straight ahead
+                        const firstRingPos = pathCursor.current.clone().add(new Vector3(0, 0, 40));
+                        
+                        // Update cursor to this new position so next rings continue from here
+                        pathCursor.current.copy(firstRingPos);
+
+                        spawnRing(firstRingPos, pathDirection.current, 'normal', true);
+                        spawnCount.current = 1;
+                    } else {
+                        // Fallback to bird position
+                        pathCursor.current.copy(birdPosition);
+                        pathDirection.current.set(0, 0, 1).applyQuaternion(birdRotation).normalize();
+                    }
+                    
+                    setRings([...ringsRef.current]);
                 }
-                
-                setRings([...ringsRef.current]);
             }
-        }
         
         // Race mode timer tick
         if (gameActive.current && statsRef.current.ringGameMode === 'race') {
@@ -268,9 +381,11 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                 // Use increasing gap for race mode
                 const currentGap = statsRef.current.ringGameMode === 'race' ? raceCurrentGap.current : RING_GAP;
 
+                // Move cursor forward by gap amount
                 pathCursor.current.add(pathDirection.current.clone().multiplyScalar(currentGap));
-
-                pathCursor.current.add(pathDirection.current.clone().multiplyScalar(currentGap));
+                
+                // Note: Removed the double-add that was causing gaps to be 2x intended size
+                // pathCursor.current.add(pathDirection.current.clone().multiplyScalar(currentGap));
 
                 // TERRAIN AVOIDANCE & MOUNTAIN MODE LOGIC
                 const tH = getTerrainHeight(pathCursor.current.x, pathCursor.current.z);
@@ -307,7 +422,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                     }
                 }
 
-                const rand = Math.random();
+                const rand = statsRef.current.ringGameMode === 'race' ? rngRef.current.next() : Math.random();
                 let type: RingData['type'] = 'normal';
                 if (rand > 0.7) type = 'small';
                 if (rand > 0.9) type = 'moving';
@@ -367,17 +482,29 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                         // Notify multiplayer of checkpoint
                         onCheckpoint?.(statsRef.current.raceRingsCollected);
                         
-                        // Increase gap for next ring (capped at max)
-                        raceCurrentGap.current = Math.min(raceCurrentGap.current + RACE_GAP_INCREMENT, RACE_MAX_GAP);
-                        
-                        // Calculate time for next ring based on distance
-                        const nextRingTime = RACE_BASE_TIME_BONUS + (raceCurrentGap.current * RACE_TIME_PER_DISTANCE);
-                        statsRef.current.raceTimeRemaining = nextRingTime;
-                        lastRaceUpdateTime.current = time;
+                        // Check for WIN
+                        if (statsRef.current.raceRingsCollected >= RACE_TOTAL_RINGS) {
+                            statsRef.current.isRingGameActive = false;
+                            gameActive.current = false;
+                            onRaceWin?.();
+                        } else {
+                            // Increase gap for next ring (capped at max)
+                            raceCurrentGap.current = Math.min(raceCurrentGap.current + RACE_GAP_INCREMENT, RACE_MAX_GAP);
+                            
+                            // Calculate time for next ring based on distance
+                            const nextRingTime = RACE_BASE_TIME_BONUS + (raceCurrentGap.current * RACE_TIME_PER_DISTANCE);
+                            statsRef.current.raceTimeRemaining = nextRingTime;
+                            lastRaceUpdateTime.current = time;
+                        }
                     }
                 }
 
             } else if (distSq > 400 * 400) {
+                // In race mode, disable distance despawning
+                if (gameActive.current && statsRef.current.ringGameMode === 'race') {
+                    return;
+                }
+
                 // MISS (Too far away)
                 targetRing.passed = true;
                 if (gameActive.current) {
@@ -432,6 +559,8 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                     isNext={!ring.passed && ring.id === rings.find(r => !r.passed)?.id}
                 />
             ))}
+            {/* Draw Race Line connecting the rings */}
+            {statsRef.current.ringGameMode === 'race' && <RaceLine rings={rings} />}
         </group>
     );
 });

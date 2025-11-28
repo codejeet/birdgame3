@@ -4,10 +4,18 @@ import { RemotePlayer, RaceParticipant, LobbyPlayer, RacePortalData, LobbyState 
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
 
+export interface RaceResult {
+  id: string;
+  name: string;
+  rank: number;
+  checkpoints: number;
+}
+
 interface MultiplayerHook {
   connected: boolean;
   playerId: string | null;
   playerName: string | null;
+  playerScore: number;
   players: Map<string, RemotePlayer>;
   // Race state
   inRace: boolean;
@@ -15,6 +23,7 @@ interface MultiplayerHook {
   raceSeed: number | null;
   raceParticipants: RaceParticipant[];
   raceStartPosition: [number, number, number] | null;
+  raceResults: RaceResult[] | null;
   // Lobby state
   lobby: LobbyState | null;
   activePortals: RacePortalData[];
@@ -26,6 +35,7 @@ interface MultiplayerHook {
   setReady: (ready: boolean) => void;
   startRace: () => void;
   leaveRace: () => void;
+  winRace: () => void;
   updateCheckpoint: (checkpoints: number) => void;
 }
 
@@ -34,6 +44,7 @@ export function useMultiplayer(): MultiplayerHook {
   const [connected, setConnected] = useState(false);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState<string | null>(null);
+  const [playerScore, setPlayerScore] = useState<number>(0);
   const [players, setPlayers] = useState<Map<string, RemotePlayer>>(new Map());
   
   // Race state
@@ -42,6 +53,7 @@ export function useMultiplayer(): MultiplayerHook {
   const [raceSeed, setRaceSeed] = useState<number | null>(null);
   const [raceParticipants, setRaceParticipants] = useState<RaceParticipant[]>([]);
   const [raceStartPosition, setRaceStartPosition] = useState<[number, number, number] | null>(null);
+  const [raceResults, setRaceResults] = useState<RaceResult[] | null>(null);
   
   // Lobby state
   const [lobby, setLobby] = useState<LobbyState | null>(null);
@@ -75,19 +87,24 @@ export function useMultiplayer(): MultiplayerHook {
     });
 
     socket.on('welcome', (data: {
-      you: { id: string; name: string };
+      you: { id: string; name: string; score: number };
       players: RemotePlayer[];
       portals: RacePortalData[];
     }) => {
       setPlayerId(data.you.id);
       setPlayerName(data.you.name);
+      setPlayerScore(data.you.score || 0);
       
       const playerMap = new Map<string, RemotePlayer>();
       data.players.forEach(p => playerMap.set(p.id, p));
       setPlayers(playerMap);
       setActivePortals(data.portals || []);
       
-      console.log(`🐦 Welcome ${data.you.name}! ${data.players.length} other birds flying`);
+      console.log(`🐦 Welcome ${data.you.name}! Score: ${data.you.score}`);
+    });
+
+    socket.on('score:update', (data: { score: number }) => {
+        setPlayerScore(data.score);
     });
 
     socket.on('player:joined', (data: { player: RemotePlayer }) => {
@@ -241,6 +258,7 @@ export function useMultiplayer(): MultiplayerHook {
       setRaceSeed(data.seed);
       setRaceParticipants(data.players);
       setRaceStartPosition(data.startPosition);
+      setRaceResults(null);
       console.log(`🏁 Race started! Seed: ${data.seed}`);
     });
 
@@ -250,6 +268,15 @@ export function useMultiplayer(): MultiplayerHook {
 
     socket.on('race:playerLeft', (data: { playerId: string; finalCheckpoints?: number }) => {
       setRaceParticipants(prev => prev.filter(p => p.id !== data.playerId));
+    });
+
+    socket.on('race:ended', (data: { results: RaceResult[] }) => {
+        setInRace(false);
+        setRaceId(null);
+        setRaceSeed(null);
+        setRaceParticipants([]);
+        setRaceStartPosition(null);
+        setRaceResults(data.results);
     });
 
     socket.on('race:update', (data: { playerId: string; checkpoints: number }) => {
@@ -301,22 +328,35 @@ export function useMultiplayer(): MultiplayerHook {
     setRaceId(null);
     setRaceSeed(null);
     setRaceParticipants([]);
+    setRaceStartPosition(null);
+    setRaceResults(null);
+  }, []);
+
+  const winRace = useCallback(() => {
+    socketRef.current?.emit('race:win');
+    // Don't leave immediately, wait for server to end race for everyone
   }, []);
 
   const updateCheckpoint = useCallback((checkpoints: number) => {
     socketRef.current?.emit('race:checkpoint', { checkpoints });
   }, []);
 
+  const clearRaceResults = useCallback(() => {
+    setRaceResults(null);
+  }, []);
+
   return {
     connected,
     playerId,
     playerName,
+    playerScore,
     players,
     inRace,
     raceId,
     raceSeed,
     raceParticipants,
     raceStartPosition,
+    raceResults,
     lobby,
     activePortals,
     updatePosition,
@@ -326,6 +366,8 @@ export function useMultiplayer(): MultiplayerHook {
     setReady,
     startRace,
     leaveRace,
-    updateCheckpoint
+    winRace,
+    updateCheckpoint,
+    clearRaceResults
   };
 }

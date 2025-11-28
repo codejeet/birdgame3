@@ -8,6 +8,9 @@ interface MultiplayerInfo {
   playerCount: number;
   inRace: boolean;
   raceParticipants: RaceParticipant[];
+  score?: number;
+  activePortals?: { lobbyId: string; hostName: string; playerCount: number }[];
+  onJoinLobby?: (lobbyId: string) => void;
 }
 
 interface HUDProps {
@@ -58,8 +61,11 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
 
         // Score
         if (score !== lastScore) {
-          if (scoreRef.current) scoreRef.current.innerText = score.toString();
-          lastScore = score;
+          // If in multiplayer, show server score if available, otherwise show session score
+          const displayScore = multiplayer?.score !== undefined ? multiplayer.score : score;
+          
+          if (scoreRef.current) scoreRef.current.innerText = displayScore.toString();
+          lastScore = displayScore;
         }
 
         // Alt
@@ -315,10 +321,35 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
               )}
             </div>
           )}
+
+          {/* Lobby List */}
+          {multiplayer?.connected && !multiplayer.inRace && multiplayer.activePortals && multiplayer.activePortals.length > 0 && (
+            <div className="bg-black/30 backdrop-blur-md p-3 rounded-xl text-white border border-green-500/30 shadow-lg w-48 mt-2">
+                <div className="text-[10px] uppercase tracking-widest text-green-400 mb-2 border-b border-white/10 pb-1">
+                    Active Lobbies
+                </div>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {multiplayer.activePortals.map(portal => (
+                        <div key={portal.lobbyId} className="bg-white/5 p-2 rounded flex flex-col gap-1">
+                            <div className="flex justify-between text-xs">
+                                <span className="font-bold truncate w-24">{portal.hostName}'s Race</span>
+                                <span className="text-gray-400">{portal.playerCount} 🐦</span>
+                            </div>
+                            <button 
+                                onClick={() => multiplayer.onJoinLobby?.(portal.lobbyId)}
+                                className="w-full bg-green-600 hover:bg-green-500 text-[10px] font-bold py-1 rounded text-center transition-colors uppercase tracking-wider"
+                            >
+                                Join
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            </div>
+          )}
           
           {/* Race Leaderboard */}
           {multiplayer?.inRace && multiplayer.raceParticipants.length > 0 && (
-            <div className="bg-gradient-to-b from-orange-900/80 to-red-900/80 backdrop-blur-md p-3 rounded-xl text-white border border-orange-500/30 shadow-lg w-48">
+            <div className="bg-gradient-to-b from-orange-900/80 to-red-900/80 backdrop-blur-md p-3 rounded-xl text-white border border-orange-500/30 shadow-lg w-48 mt-2">
               <div className="text-[10px] uppercase tracking-widest text-orange-300 mb-2 border-b border-white/10 pb-1">
                 🏁 Race Leaderboard
               </div>

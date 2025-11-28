@@ -6,10 +6,18 @@ const GRAD3 = [[1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0],
 [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1],
 [0, 1, 1], [0, -1, 1], [0, 1, -1], [0, -1, -1]];
 
+// Simple Linear Congruential Generator for deterministic "random" numbers
+let seed = 12345;
+function seededRandom() {
+  seed = (seed * 9301 + 49297) % 233280;
+  return seed / 233280;
+}
+
 function initNoise() {
   for (let i = 0; i < 256; i++) PERM[i] = i;
   for (let i = 0; i < 256; i++) {
-    const j = Math.floor(Math.random() * 256);
+    // Use seededRandom instead of Math.random() for consistency across clients
+    const j = Math.floor(seededRandom() * 256);
     const t = PERM[i];
     PERM[i] = PERM[j];
     PERM[j] = t;
