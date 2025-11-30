@@ -16,16 +16,17 @@ interface BirdProps {
     teleportRotation?: [number, number, number, number] | null;
     frozen?: boolean;
     raceStartPosition?: [number, number, number] | null;
+    mouseSensitivity?: number;
 }
 
 type BirdMode = 'flying' | 'walking';
 
 const WATER_LEVEL = 10;
 
-export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rotationRef, teleportTarget, teleportRotation, frozen, raceStartPosition }: BirdProps) => {
+export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rotationRef, teleportTarget, teleportRotation, frozen, raceStartPosition, mouseSensitivity = 1.0 }: BirdProps) => {
     const birdRef = useRef<Group>(null);
     const { camera } = useThree();
-    const controls = useControls();
+    const controls = useControls(mouseSensitivity);
 
     const mode = useRef<BirdMode>('flying');
     const takeoffTimer = useRef(0);

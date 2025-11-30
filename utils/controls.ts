@@ -2,7 +2,7 @@
 import { useEffect, useRef } from 'react';
 import { ControlsState } from '../types';
 
-export function useControls() {
+export function useControls(sensitivityMultiplier: number = 1.0) {
   const input = useRef<ControlsState>({
     forward: false,
     backward: false,
@@ -68,7 +68,7 @@ export function useControls() {
     const handleMouseMove = (e: MouseEvent) => {
       if (document.pointerLockElement) {
         // Pointer Lock Mode: Accumulate delta movement
-        const sensitivity = 0.002;
+        const sensitivity = 0.002 * sensitivityMultiplier;
         joystick.current.x += e.movementX * sensitivity;
         joystick.current.y += e.movementY * sensitivity;
       } else {
@@ -154,7 +154,7 @@ export function useControls() {
 
         // Virtual joystick: map touch position relative to start
         // Scale based on screen size for sensitivity
-        const sensitivity = 0.003;
+        const sensitivity = 0.003 * sensitivityMultiplier;
         joystick.current.x += deltaX * sensitivity;
         joystick.current.y += deltaY * sensitivity;
 
@@ -230,7 +230,7 @@ export function useControls() {
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);
     };
-  }, []);
+  }, [sensitivityMultiplier]);
 
   return input;
 }

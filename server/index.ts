@@ -2,9 +2,16 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
+import path from 'path';
 
 const app = express();
 app.use(cors());
+
+// Serve static files from dist (production build)
+app.use(express.static(path.join(__dirname, '../dist')));
+
+// Serve music files
+app.use('/music', express.static(path.join(__dirname, '../public/music')));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {

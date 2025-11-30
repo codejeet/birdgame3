@@ -345,7 +345,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
                             </div>
                             <button 
                                 onClick={() => multiplayer.onJoinLobby?.(portal.lobbyId)}
-                                className="w-full bg-green-600 hover:bg-green-500 text-[10px] font-bold py-1 rounded text-center transition-colors uppercase tracking-wider"
+                                className="w-full bg-green-600 hover:bg-green-500 text-[10px] font-bold py-1 rounded text-center transition-colors uppercase tracking-wider pointer-events-auto"
                             >
                                 Join
                             </button>

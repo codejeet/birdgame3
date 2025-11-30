@@ -1,5 +1,6 @@
 
-import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useRef, useImperativeHandle, forwardRef, useCallback } from 'react';
+import { GameSettings } from './Settings';
 
 export interface AudioHandle {
     playFlap: () => void;
@@ -11,22 +12,57 @@ export interface AudioHandle {
 
 interface AudioControllerProps {
     isPaused: boolean;
+    settings: GameSettings;
 }
 
-export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ isPaused }, ref) => {
+// Chunked lofi stream files (split for git compatibility)
+const LOFI_PARTS = [
+    '/music/lofi-part-00.mp3',
+    '/music/lofi-part-01.mp3',
+    '/music/lofi-part-02.mp3',
+    '/music/lofi-part-03.mp3',
+    '/music/lofi-part-04.mp3',
+    '/music/lofi-part-05.mp3',
+    '/music/lofi-part-06.mp3',
+    '/music/lofi-part-07.mp3',
+    '/music/lofi-part-08.mp3',
+];
+
+export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ isPaused, settings }, ref) => {
     const bgmRef = useRef<HTMLAudioElement | null>(null);
-    const chirpRef = useRef<HTMLAudioElement | null>(null);
+    const currentPartRef = useRef(0);
+    const hasInteractedRef = useRef(false);
+    
+    // Multiple chirp sounds for variety
+    const chirpRefs = useRef<HTMLAudioElement[]>([]);
 
     // SFX Refs
     const ringCollectRef = useRef<HTMLAudioElement | null>(null);
     const gameStartRef = useRef<HTMLAudioElement | null>(null);
+
+    // Play next part in the lofi stream
+    const playNextPart = useCallback(() => {
+        if (!bgmRef.current) return;
+        
+        currentPartRef.current = (currentPartRef.current + 1) % LOFI_PARTS.length;
+        const nextPart = LOFI_PARTS[currentPartRef.current];
+        
+        bgmRef.current.src = nextPart;
+        bgmRef.current.load();
+        
+        if (hasInteractedRef.current && !isPaused) {
+            bgmRef.current.play().catch(() => {});
+        }
+        
+        console.log(`🎵 Playing lofi part ${currentPartRef.current + 1}/${LOFI_PARTS.length}`);
+    }, [isPaused]);
 
     useImperativeHandle(ref, () => ({
         playFlap: () => {
             // Flap SFX removed as per request
         },
         playRingCollect: () => {
-            if (ringCollectRef.current) {
+            if (ringCollectRef.current && !settings.sfxMuted) {
                 ringCollectRef.current.currentTime = 0;
                 ringCollectRef.current.play().catch(() => { });
             }
@@ -35,7 +71,7 @@ export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ 
             // Removed
         },
         playGameStart: () => {
-            if (gameStartRef.current) {
+            if (gameStartRef.current && !settings.sfxMuted) {
                 gameStartRef.current.currentTime = 0;
                 gameStartRef.current.play().catch(() => { });
             }
@@ -46,29 +82,50 @@ export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ 
     }));
 
     useEffect(() => {
-        // Chill Lofi Music
-        bgmRef.current = new Audio('https://cdn.pixabay.com/audio/2022/05/27/audio_1808fbf07a.mp3');
-        bgmRef.current.loop = true;
-        bgmRef.current.volume = 0.3;
+        // Create audio element for streaming lofi parts
+        const audio = new Audio();
+        
+        // Enable streaming - don't wait for full file to load
+        audio.preload = 'none';
+        audio.src = LOFI_PARTS[0];
+        audio.volume = settings.musicMuted ? 0 : settings.musicVolume;
+        
+        // When current part ends, play the next one
+        const handleEnded = () => {
+            playNextPart();
+        };
+        audio.addEventListener('ended', handleEnded);
+        
+        bgmRef.current = audio;
 
-        // Chirp SFX (Ambience)
-        chirpRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/2434/2434-preview.mp3');
-        chirpRef.current.volume = 0.15;
+        // Multiple bird chirp SFX for variety and ambience
+        const chirpUrls = [
+            'https://assets.mixkit.co/active_storage/sfx/2434/2434-preview.mp3', // Bird chirp
+            'https://assets.mixkit.co/active_storage/sfx/2473/2473-preview.mp3', // Forest birds
+            'https://assets.mixkit.co/active_storage/sfx/2472/2472-preview.mp3', // Morning birds
+        ];
+        
+        chirpRefs.current = chirpUrls.map(url => {
+            const audio = new Audio(url);
+            audio.volume = settings.sfxMuted ? 0 : settings.sfxVolume * 0.8; // Prominent volume
+            return audio;
+        });
 
         // Ring SFX
-        ringCollectRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3'); // Arcade bonus
-        ringCollectRef.current.volume = 0.4;
+        ringCollectRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3');
+        ringCollectRef.current.volume = settings.sfxMuted ? 0 : settings.sfxVolume;
 
-        gameStartRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3'); // Re-use good sound for start
-        gameStartRef.current.volume = 0.25;
-
+        gameStartRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3');
+        gameStartRef.current.volume = settings.sfxMuted ? 0 : settings.sfxVolume * 0.625;
 
         // Attempt auto-play, or wait for interaction
         const tryPlay = () => {
             if (bgmRef.current && !isPaused) {
-                bgmRef.current.play().catch((e) => {
-                    // Autoplay prevented
-                    console.log("Audio autoplay prevented, waiting for interaction.");
+                bgmRef.current.play().then(() => {
+                    hasInteractedRef.current = true;
+                    console.log(`🎵 Lofi stream started (part 1/${LOFI_PARTS.length})`);
+                }).catch(() => {
+                    console.log('🎵 Audio autoplay prevented, waiting for interaction.');
                 });
             }
         };
@@ -76,11 +133,14 @@ export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ 
         tryPlay();
 
         const unlockAudio = () => {
+            hasInteractedRef.current = true;
             if (bgmRef.current && bgmRef.current.paused && !isPaused) {
-                bgmRef.current.play().catch(() => { });
+                bgmRef.current.play().then(() => {
+                    console.log(`🎵 Lofi stream started (part 1/${LOFI_PARTS.length})`);
+                }).catch(() => { });
             }
             // Also prime SFX
-            if (chirpRef.current) chirpRef.current.load();
+            chirpRefs.current.forEach(chirp => chirp.load());
             if (ringCollectRef.current) ringCollectRef.current.load();
 
             window.removeEventListener('click', unlockAudio);
@@ -91,7 +151,11 @@ export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ 
         window.addEventListener('keydown', unlockAudio);
 
         return () => {
-            bgmRef.current?.pause();
+            if (bgmRef.current) {
+                bgmRef.current.removeEventListener('ended', handleEnded);
+                bgmRef.current.pause();
+                bgmRef.current.src = '';
+            }
             window.removeEventListener('click', unlockAudio);
             window.removeEventListener('keydown', unlockAudio);
         };
@@ -102,23 +166,58 @@ export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ 
         if (!bgmRef.current) return;
         if (isPaused) {
             bgmRef.current.pause();
-        } else {
-            // Only resume if we have interacted or it was playing before
+        } else if (hasInteractedRef.current) {
             bgmRef.current.play().catch(() => { });
         }
     }, [isPaused]);
-
-    // Ambient Chirps Loop
+    
+    // Handle Settings Changes
     useEffect(() => {
-        const interval = setInterval(() => {
-            // 40% chance to chirp every 10 seconds if not paused
-            if (!isPaused && chirpRef.current && Math.random() > 0.6) {
-                chirpRef.current.currentTime = 0;
-                chirpRef.current.play().catch(() => { });
+        if (bgmRef.current) {
+            bgmRef.current.volume = settings.musicMuted ? 0 : settings.musicVolume;
+        }
+        chirpRefs.current.forEach(chirp => {
+            chirp.volume = settings.sfxMuted ? 0 : settings.sfxVolume * 0.8;
+        });
+        if (ringCollectRef.current) {
+            ringCollectRef.current.volume = settings.sfxMuted ? 0 : settings.sfxVolume;
+        }
+        if (gameStartRef.current) {
+            gameStartRef.current.volume = settings.sfxMuted ? 0 : settings.sfxVolume * 0.625;
+        }
+    }, [settings]);
+
+    // Ambient Chirps Loop - More frequent and varied
+    useEffect(() => {
+        // Primary chirp interval - every 4-8 seconds
+        const primaryInterval = setInterval(() => {
+            if (!isPaused && !settings.sfxMuted && chirpRefs.current.length > 0) {
+                // 70% chance to chirp
+                if (Math.random() < 0.7) {
+                    const randomChirp = chirpRefs.current[Math.floor(Math.random() * chirpRefs.current.length)];
+                    randomChirp.currentTime = 0;
+                    randomChirp.play().catch(() => { });
+                }
             }
-        }, 10000);
-        return () => clearInterval(interval);
-    }, [isPaused]);
+        }, 4000 + Math.random() * 4000);
+        
+        // Secondary chirp interval - occasional overlapping chirps for richness
+        const secondaryInterval = setInterval(() => {
+            if (!isPaused && !settings.sfxMuted && chirpRefs.current.length > 0) {
+                // 40% chance for secondary chirp
+                if (Math.random() < 0.4) {
+                    const randomChirp = chirpRefs.current[Math.floor(Math.random() * chirpRefs.current.length)];
+                    randomChirp.currentTime = 0;
+                    randomChirp.play().catch(() => { });
+                }
+            }
+        }, 7000 + Math.random() * 5000);
+        
+        return () => {
+            clearInterval(primaryInterval);
+            clearInterval(secondaryInterval);
+        };
+    }, [isPaused, settings.sfxMuted]);
 
     return null;
 });

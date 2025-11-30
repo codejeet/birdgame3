@@ -15,6 +15,7 @@ import { AudioController, AudioHandle } from './AudioController';
 import { OtherPlayers } from './OtherPlayers';
 import { RacePortals } from './RacePortal';
 import { VictoryScreen } from './VictoryScreen';
+import { Settings, GameSettings, loadSettings } from './Settings';
 import { useMultiplayer } from '../utils/multiplayer';
 import { GameStats, RingGameMode } from '../types';
 
@@ -185,11 +186,13 @@ export const GameScene: React.FC = () => {
   const targetRingRef = useRef<Vector3 | null>(null);
 
   const [isPaused, setIsPaused] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [isPointerLocked, setIsPointerLocked] = useState(false);
   const [showModeSelect, setShowModeSelect] = useState(false);
   const [pendingRacePortalPosition, setPendingRacePortalPosition] = useState<[number, number, number] | null>(null);
   const [teleportTarget, setTeleportTarget] = useState<[number, number, number] | null>(null);
   const [teleportRotation, setTeleportRotation] = useState<[number, number, number, number] | null>(null);
+  const [settings, setSettings] = useState<GameSettings>(loadSettings());
 
   const audioRef = useRef<AudioHandle>(null);
   
@@ -326,14 +329,17 @@ export const GameScene: React.FC = () => {
     audioRef.current?.playFlap();
   }, []);
 
-  // Pointer Lock and Pause Logic
+  // Pointer Lock and Settings Logic
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Escape') {
-        setIsPaused(prev => {
+        setShowSettings(prev => {
           const next = !prev;
           if (next) {
             document.exitPointerLock();
+            setIsPaused(true);
+          } else {
+            setIsPaused(false);
           }
           return next;
         });
@@ -343,7 +349,7 @@ export const GameScene: React.FC = () => {
     const handleClick = (e: MouseEvent) => {
       if ((e.target as HTMLElement).closest('button')) return;
 
-      if (!isPaused && !document.pointerLockElement) {
+      if (!isPaused && !document.pointerLockElement && !showSettings) {
         document.body.requestPointerLock();
       }
     };
@@ -364,7 +370,7 @@ export const GameScene: React.FC = () => {
       document.removeEventListener('click', handleClick);
       document.removeEventListener('pointerlockchange', handlePointerLockChange);
     };
-  }, [isPaused]);
+  }, [isPaused, showSettings]);
 
   return (
     <>
@@ -381,32 +387,18 @@ export const GameScene: React.FC = () => {
           onJoinLobby: handleEnterPortal
         }}
       />
-      <AudioController ref={audioRef} isPaused={isPaused} />
-
-      {isPaused && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-white/10 p-10 rounded-3xl border border-white/20 text-center shadow-2xl backdrop-blur-md transform transition-all">
-            <h2 className="text-5xl font-black text-white mb-10 tracking-wider drop-shadow-lg italic">PAUSED</h2>
-            <div className="flex flex-col gap-4 w-64">
-              <button
-                onClick={() => {
-                  setIsPaused(false);
-                }}
-                className="px-8 py-4 bg-yellow-400 hover:bg-yellow-300 text-black font-bold rounded-xl transition-all transform hover:scale-105 hover:shadow-lg text-lg uppercase tracking-widest"
-              >
-                Resume
-              </button>
-              <button
-                onClick={() => window.location.reload()}
-                className="px-8 py-4 bg-transparent border-2 border-white/30 text-white hover:bg-white/10 font-bold rounded-xl transition-all hover:border-white text-lg uppercase tracking-widest"
-              >
-                Restart
-              </button>
-            </div>
-            <p className="mt-8 text-white/50 text-xs">Click anywhere to capture mouse cursor</p>
-          </div>
-        </div>
-      )}
+      <AudioController ref={audioRef} isPaused={isPaused} settings={settings} />
+      
+      <Settings 
+        isOpen={showSettings}
+        onClose={() => {
+          setShowSettings(false);
+          setIsPaused(false);
+        }}
+        onSettingsChange={(newSettings) => {
+          setSettings(newSettings);
+        }}
+      />
 
       {showModeSelect && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
@@ -528,7 +520,7 @@ export const GameScene: React.FC = () => {
         />
       )}
 
-      {!isPaused && !isPointerLocked && !showModeSelect && !multiplayer.raceResults && !/Mobi|Android/i.test(navigator.userAgent) && (
+      {!isPaused && !isPointerLocked && !showModeSelect && !showSettings && !multiplayer.raceResults && !/Mobi|Android/i.test(navigator.userAgent) && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/20 pointer-events-none">
           <div className="bg-black/50 backdrop-blur-sm px-8 py-4 rounded-full border border-white/10 text-white font-bold tracking-widest animate-pulse">
             CLICK TO CAPTURE MOUSE CURSOR
@@ -572,6 +564,7 @@ export const GameScene: React.FC = () => {
           teleportRotation={teleportRotation}
           frozen={isInLobby}
           raceStartPosition={multiplayer.inRace ? multiplayer.raceStartPosition : null}
+          mouseSensitivity={settings.mouseSensitivity}
         />
 
         <Collectibles
