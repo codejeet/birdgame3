@@ -14,8 +14,8 @@ export function useControls() {
     flap: false,
     dive: false,
     reset: false,
+    shoot: false,
     mouseDown: false,
-    mouseX: 0,
     mouseX: 0,
     mouseY: 0,
     mobileTap: false,
@@ -87,13 +87,13 @@ export function useControls() {
 
     const handleMouseDown = (e: MouseEvent) => {
       // 0: Left, 2: Right
-      if (e.button === 0) input.current.flap = true;
+      if (e.button === 0) input.current.shoot = true;
       if (e.button === 2) input.current.dive = true;
       input.current.mouseDown = true;
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-      if (e.button === 0) input.current.flap = false;
+      if (e.button === 0) input.current.shoot = false;
       if (e.button === 2) input.current.dive = false;
       input.current.mouseDown = false;
     };

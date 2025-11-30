@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { RemotePlayer, RaceParticipant, LobbyPlayer, RacePortalData, LobbyState } from '../types';
+import { RemotePlayer, RaceParticipant, LobbyPlayer, RacePortalData, LobbyState, BattleState, BattlePlayer, Projectile, BattlePickup, BattleModeType } from '../types';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
 
@@ -29,7 +29,7 @@ interface MultiplayerHook {
   activePortals: RacePortalData[];
   // Actions
   updatePosition: (position: [number, number, number], rotation: [number, number, number, number]) => void;
-  createLobby: (position: [number, number, number]) => void;
+  createLobby: (position: [number, number, number], mode?: 'race' | 'battle', battleType?: 'deathmatch' | 'ctf') => void;
   joinLobby: (lobbyId: string) => void;
   leaveLobby: () => void;
   setReady: (ready: boolean) => void;
@@ -37,6 +37,20 @@ interface MultiplayerHook {
   leaveRace: () => void;
   winRace: () => void;
   updateCheckpoint: (checkpoints: number) => void;
+  // Battle state
+  battle: BattleState | null;
+  projectiles: Projectile[];
+  pickups: BattlePickup[];
+  activePowerups: Map<string, number>;
+  // Battle actions
+  shoot: (position: [number, number, number], velocity: [number, number, number], type: 'normal' | 'explosive') => void;
+  reportHit: (targetId: string, damage: number) => void;
+  respawn: () => void;
+  collectPickup: (pickupId: string) => void;
+  pickupFlag: () => void;
+  stealFlag: (targetId: string) => void;
+  score: () => void;
+  clearRaceResults: () => void;
 }
 
 export function useMultiplayer(): MultiplayerHook {
@@ -46,7 +60,7 @@ export function useMultiplayer(): MultiplayerHook {
   const [playerName, setPlayerName] = useState<string | null>(null);
   const [playerScore, setPlayerScore] = useState<number>(0);
   const [players, setPlayers] = useState<Map<string, RemotePlayer>>(new Map());
-  
+
   // Race state
   const [inRace, setInRace] = useState(false);
   const [raceId, setRaceId] = useState<string | null>(null);
@@ -54,11 +68,17 @@ export function useMultiplayer(): MultiplayerHook {
   const [raceParticipants, setRaceParticipants] = useState<RaceParticipant[]>([]);
   const [raceStartPosition, setRaceStartPosition] = useState<[number, number, number] | null>(null);
   const [raceResults, setRaceResults] = useState<RaceResult[] | null>(null);
-  
+
   // Lobby state
   const [lobby, setLobby] = useState<LobbyState | null>(null);
   const [activePortals, setActivePortals] = useState<RacePortalData[]>([]);
-  
+
+  // Battle state
+  const [battle, setBattle] = useState<BattleState | null>(null);
+  const [projectiles, setProjectiles] = useState<Projectile[]>([]);
+  const [pickups, setPickups] = useState<BattlePickup[]>([]);
+  const [activePowerups, setActivePowerups] = useState<Map<string, number>>(new Map());
+
   // Throttle position updates
   const lastUpdateRef = useRef(0);
   const UPDATE_INTERVAL = 50;
@@ -70,7 +90,7 @@ export function useMultiplayer(): MultiplayerHook {
       reconnectionAttempts: 5,
       reconnectionDelay: 1000
     });
-    
+
     socketRef.current = socket;
 
     socket.on('connect', () => {
@@ -94,18 +114,18 @@ export function useMultiplayer(): MultiplayerHook {
       setPlayerId(data.you.id);
       setPlayerName(data.you.name);
       setPlayerScore(data.you.score || 0);
-      
+
       const playerMap = new Map<string, RemotePlayer>();
       data.players.forEach(p => playerMap.set(p.id, p));
       setPlayers(playerMap);
       setActivePortals(data.portals || []);
-      
+
       console.log(`🐦 Welcome ${data.you.name}! Score: ${data.you.score}`);
     });
 
     socket.on('score:update', (data: { score: number }) => {
-        console.log(`🐦 Received score update: ${data.score}`);
-        setPlayerScore(data.score);
+      console.log(`🐦 Received score update: ${data.score}`);
+      setPlayerScore(data.score);
     });
 
     socket.on('player:joined', (data: { player: RemotePlayer }) => {
@@ -145,13 +165,13 @@ export function useMultiplayer(): MultiplayerHook {
     });
 
     // ========== PORTAL EVENTS ==========
-    
+
     socket.on('portals:update', (data: { portals: RacePortalData[] }) => {
       setActivePortals(data.portals);
     });
 
     // ========== LOBBY EVENTS ==========
-    
+
     socket.on('lobby:created', (data: {
       lobbyId: string;
       players: LobbyPlayer[];
@@ -208,7 +228,7 @@ export function useMultiplayer(): MultiplayerHook {
         if (!prev) return prev;
         return {
           ...prev,
-          players: prev.players.map(p => 
+          players: prev.players.map(p =>
             p.id === data.playerId ? { ...p, ready: data.ready } : p
           )
         };
@@ -272,18 +292,134 @@ export function useMultiplayer(): MultiplayerHook {
     });
 
     socket.on('race:ended', (data: { results: RaceResult[] }) => {
-        setInRace(false);
-        setRaceId(null);
-        setRaceSeed(null);
-        setRaceParticipants([]);
-        setRaceStartPosition(null);
-        setRaceResults(data.results);
+      setInRace(false);
+      setRaceId(null);
+      setRaceSeed(null);
+      setRaceParticipants([]);
+      setRaceStartPosition(null);
+      setRaceResults(data.results);
     });
 
     socket.on('race:update', (data: { playerId: string; checkpoints: number }) => {
-      setRaceParticipants(prev => 
+      setRaceParticipants(prev =>
         prev.map(p => p.id === data.playerId ? { ...p, checkpoints: data.checkpoints } : p)
       );
+    });
+
+    // ========== BATTLE EVENTS ==========
+
+    socket.on('battle:start', (data: {
+      battleId: string;
+      mode: BattleModeType;
+      players: BattlePlayer[];
+      pickups: [string, any][];
+      flag: any;
+      scores: any;
+    }) => {
+      setLobby(null);
+      setInRace(true); // Reuse inRace for "game active"
+      setRaceId(data.battleId);
+
+      setBattle({
+        isActive: true,
+        mode: data.mode,
+        timeLeft: 300,
+        scores: data.scores,
+        flag: data.flag,
+        myTeam: data.players.find(p => p.id === socket.id)?.team
+      });
+
+      // Update players with battle stats
+      const playerMap = new Map<string, RemotePlayer>();
+      data.players.forEach(p => playerMap.set(p.id, p));
+      setPlayers(playerMap);
+
+      // Set pickups
+      setPickups(data.pickups.map(([id, p]) => ({ id, ...p })));
+
+      console.log(`⚔️ Battle started! Mode: ${data.mode}`);
+    });
+
+    socket.on('battle:projectile', (data: Projectile) => {
+      setProjectiles(prev => [...prev, { ...data, createdAt: Date.now() }]);
+    });
+
+    socket.on('battle:damage', (data: { targetId: string, hp: number, damage: number, shooterId: string }) => {
+      setPlayers(prev => {
+        const next = new Map(prev);
+        const p = next.get(data.targetId);
+        if (p) {
+          next.set(data.targetId, { ...p, hp: data.hp });
+        }
+        return next;
+      });
+    });
+
+    socket.on('battle:kill', (data: { victimId: string, killerId: string, scores: any }) => {
+      setPlayers(prev => {
+        const next = new Map(prev);
+        const victim = next.get(data.victimId);
+        if (victim) next.set(data.victimId, { ...victim, isDead: true, deathCount: (victim.deathCount || 0) + 1 });
+
+        const killer = next.get(data.killerId);
+        if (killer) next.set(data.killerId, { ...killer, killCount: (killer.killCount || 0) + 1 });
+
+        return next;
+      });
+
+      setBattle(prev => prev ? { ...prev, scores: data.scores } : null);
+    });
+
+    socket.on('battle:respawned', (data: { playerId: string, position: [number, number, number], hp: number, ammo: number }) => {
+      setPlayers(prev => {
+        const next = new Map(prev);
+        const p = next.get(data.playerId);
+        if (p) {
+          next.set(data.playerId, {
+            ...p,
+            position: data.position,
+            hp: data.hp,
+            isDead: false,
+            ammo: data.ammo
+          });
+        }
+        return next;
+      });
+    });
+
+    socket.on('battle:ammo', (data: { ammo: number }) => {
+      setPlayers(prev => {
+        const next = new Map(prev);
+        const p = next.get(socket.id);
+        if (p) {
+          next.set(socket.id, { ...p, ammo: data.ammo });
+        }
+        return next;
+      });
+    });
+
+    socket.on('battle:pickupTaken', (data: { pickupId: string, playerId: string, type: string }) => {
+      setPickups(prev => prev.map(p => p.id === data.pickupId ? { ...p, active: false } : p));
+    });
+
+    socket.on('battle:pickupRespawn', (data: { pickupId: string }) => {
+      setPickups(prev => prev.map(p => p.id === data.pickupId ? { ...p, active: true } : p));
+    });
+
+    socket.on('battle:flagUpdate', (data: { flag: any }) => {
+      setBattle(prev => prev ? { ...prev, flag: data.flag } : null);
+    });
+
+    socket.on('battle:scoreUpdate', (data: { scores: any }) => {
+      setBattle(prev => prev ? { ...prev, scores: data.scores } : null);
+    });
+
+    socket.on('battle:powerup', (data: { effect: string, duration: number }) => {
+      setActivePowerups(prev => {
+        const next = new Map(prev);
+        next.set(data.effect, Date.now() + data.duration);
+        return next;
+      });
     });
 
     return () => {
@@ -298,12 +434,12 @@ export function useMultiplayer(): MultiplayerHook {
     const now = Date.now();
     if (now - lastUpdateRef.current < UPDATE_INTERVAL) return;
     lastUpdateRef.current = now;
-    
+
     socketRef.current?.emit('player:update', { position, rotation });
   }, []);
 
-  const createLobby = useCallback((position: [number, number, number]) => {
-    socketRef.current?.emit('lobby:create', { position });
+  const createLobby = useCallback((position: [number, number, number], mode: 'race' | 'battle' = 'race', battleType?: 'deathmatch' | 'ctf') => {
+    socketRef.current?.emit('lobby:create', { position, mode, battleType });
   }, []);
 
   const joinLobby = useCallback((lobbyId: string) => {
@@ -346,6 +482,37 @@ export function useMultiplayer(): MultiplayerHook {
     setRaceResults(null);
   }, []);
 
+  // Battle actions
+  const shoot = useCallback((position: [number, number, number], velocity: [number, number, number], type: 'normal' | 'explosive') => {
+    socketRef.current?.emit('battle:shoot', { position, velocity, type });
+  }, []);
+
+  const reportHit = useCallback((targetId: string, damage: number) => {
+    socketRef.current?.emit('battle:hit', { targetId, damage });
+  }, []);
+
+  const respawn = useCallback(() => {
+    socketRef.current?.emit('battle:respawn');
+  }, []);
+
+  const collectPickup = useCallback((pickupId: string) => {
+    socketRef.current?.emit('battle:pickup', { pickupId });
+  }, []);
+
+  const pickupFlag = useCallback(() => {
+    socketRef.current?.emit('battle:flagPickup');
+  }, []);
+
+  const stealFlag = useCallback((targetId: string) => {
+    if (!socketRef.current) return;
+    socketRef.current.emit('battle:steal', { targetId });
+  }, []);
+
+  const score = useCallback(() => {
+    if (!socketRef.current) return;
+    socketRef.current.emit('battle:score');
+  }, []);
+
   return {
     connected,
     playerId,
@@ -369,6 +536,17 @@ export function useMultiplayer(): MultiplayerHook {
     leaveRace,
     winRace,
     updateCheckpoint,
-    clearRaceResults
+    clearRaceResults,
+    battle,
+    projectiles,
+    pickups,
+    activePowerups,
+    shoot,
+    reportHit,
+    respawn,
+    collectPickup,
+    pickupFlag,
+    stealFlag,
+    score
   };
 }

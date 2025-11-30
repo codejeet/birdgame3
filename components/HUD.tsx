@@ -11,6 +11,17 @@ interface MultiplayerInfo {
   score?: number;
   activePortals?: { lobbyId: string; hostName: string; playerCount: number }[];
   onJoinLobby?: (lobbyId: string) => void;
+  // Battle
+  players?: Map<string, any>;
+  playerId?: string | null;
+  battle?: any;
+  projectiles?: any[];
+  pickups?: any[];
+  shoot?: any;
+  reportHit?: any;
+  respawn?: any;
+  collectPickup?: any;
+  activePowerups?: Map<string, number>;
 }
 
 interface HUDProps {
@@ -28,21 +39,30 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
   // Mini-game refs
   const ringPanelRef = useRef<HTMLDivElement>(null);
   const comboRef = useRef<HTMLDivElement>(null);
-  
+
   // Race mode refs
   const racePanelRef = useRef<HTMLDivElement>(null);
   const raceTimerRef = useRef<HTMLDivElement>(null);
   const raceRingsRef = useRef<HTMLDivElement>(null);
 
-  // AI Content Refs
   const missionRef = useRef<HTMLDivElement>(null);
   const loreRef = useRef<HTMLDivElement>(null);
   const warningRef = useRef<HTMLDivElement>(null);
 
+  // Battle Refs
+  const battlePanelRef = useRef<HTMLDivElement>(null);
+  const hpBarRef = useRef<HTMLDivElement>(null);
+  const ammoRef = useRef<HTMLDivElement>(null);
+  const battleScoreRef = useRef<HTMLDivElement>(null);
+  const respawnScreenRef = useRef<HTMLDivElement>(null);
+  const respawnTimerRef = useRef<HTMLDivElement>(null);
+  const teamIndicatorRef = useRef<HTMLDivElement>(null);
+  const powerupContainerRef = useRef<HTMLDivElement>(null);
+
   // Keep track of latest multiplayer props for the animation loop
   const multiplayerRef = useRef(multiplayer);
   useEffect(() => {
-      multiplayerRef.current = multiplayer;
+    multiplayerRef.current = multiplayer;
   }, [multiplayer]);
 
   useEffect(() => {
@@ -53,7 +73,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
 
     let lastActive = false;
     let lastCombo = -1;
-    
+
     let lastRaceTime = -1;
     let lastRaceRings = -1;
     let lastRaceMode = false;
@@ -133,7 +153,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
             }
           }
         }
-        
+
         // Race Mode HUD Logic
         if (racePanelRef.current) {
           // Check multiplayer.inRace first to ensure we hide if race ended server-side
@@ -144,7 +164,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
             racePanelRef.current.style.transform = isRaceMode ? 'translateY(0)' : 'translateY(-20px)';
             lastRaceMode = isRaceMode;
           }
-          
+
           if (isRaceMode) {
             const displayTime = Math.max(0, Math.ceil(raceTimeRemaining * 10) / 10).toFixed(1);
             if (raceTimeRemaining !== lastRaceTime) {
@@ -161,7 +181,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
               }
               lastRaceTime = raceTimeRemaining;
             }
-            
+
             if (raceRingsCollected !== lastRaceRings) {
               if (raceRingsRef.current) raceRingsRef.current.innerText = raceRingsCollected.toString();
               lastRaceRings = raceRingsCollected;
@@ -173,6 +193,103 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
         if (warningRef.current) {
           const showWarning = !isRingGameActive && speed > 1.5;
           warningRef.current.style.opacity = showWarning ? '1' : '0';
+        }
+
+        // Battle Mode HUD Logic
+        if (battlePanelRef.current) {
+          const currentMultiplayer = multiplayerRef.current;
+          const isBattle = currentMultiplayer?.battle?.isActive;
+
+          if (isBattle) {
+            battlePanelRef.current.style.opacity = '1';
+            battlePanelRef.current.style.transform = 'translateY(0)';
+
+            // Update HP
+            if (hpBarRef.current && currentMultiplayer?.players) {
+              const me = currentMultiplayer.players.get(currentMultiplayer.playerId || '');
+              if (me) {
+                const hpPercent = Math.max(0, (me.hp || 0)); // Assuming max 100
+                hpBarRef.current.style.width = `${hpPercent}%`;
+                hpBarRef.current.style.backgroundColor = hpPercent < 30 ? '#ef4444' : '#22c55e';
+
+                // Ammo
+                if (ammoRef.current) {
+                  ammoRef.current.innerText = `${me.ammo || 0}`;
+                }
+
+                // Dead state
+                if (respawnScreenRef.current) {
+                  if (me.isDead) {
+                    respawnScreenRef.current.style.display = 'flex';
+                    if (respawnTimerRef.current) {
+                      // Simple countdown simulation or just "Press R"
+                      respawnTimerRef.current.innerText = "PRESS R TO RESPAWN";
+                    }
+                  } else {
+                    respawnScreenRef.current.style.display = 'none';
+                  }
+                }
+              }
+            }
+
+            // Scoreboard
+            if (battleScoreRef.current && currentMultiplayer?.battle?.scores) {
+              const scores = currentMultiplayer.battle.scores;
+              // Format scores
+              let scoreText = '';
+              if (currentMultiplayer.battle.mode === 'deathmatch') {
+                const sorted = Object.entries(scores).sort(([, a], [, b]) => (b as number) - (a as number)).slice(0, 5);
+                scoreText = sorted.map(([id, score], i) => {
+                  const p = currentMultiplayer.players.get(id);
+                  return `<div class="flex justify-between text-xs ${id === currentMultiplayer.playerId ? 'text-yellow-300' : 'text-gray-300'}"><span>${i + 1}. ${p?.name || 'Unknown'}</span><span>${score}</span></div>`;
+                }).join('');
+              } else if (currentMultiplayer.battle.mode === 'ctf') {
+                scoreText = `
+                            <div class="flex justify-between text-red-400 font-bold"><span>RED</span><span>${scores.red || 0}</span></div>
+                            <div class="flex justify-between text-blue-400 font-bold"><span>BLUE</span><span>${scores.blue || 0}</span></div>
+                        `;
+              }
+              battleScoreRef.current.innerHTML = scoreText;
+            }
+
+            // Team Indicator
+            if (teamIndicatorRef.current) {
+              const myTeam = currentMultiplayer?.battle?.myTeam;
+              if (myTeam) {
+                teamIndicatorRef.current.innerText = `TEAM ${myTeam.toUpperCase()}`;
+                teamIndicatorRef.current.style.color = myTeam === 'red' ? '#ff6666' : '#6666ff';
+                teamIndicatorRef.current.style.display = 'block';
+              } else {
+                teamIndicatorRef.current.style.display = 'none';
+              }
+            }
+
+            // Powerups
+            if (powerupContainerRef.current && currentMultiplayer?.activePowerups) {
+              const powerups = Array.from(currentMultiplayer.activePowerups.entries());
+              const now = Date.now();
+              const active = powerups.filter(([, end]) => end > now);
+
+              powerupContainerRef.current.innerHTML = active.map(([type, end]) => {
+                const timeLeft = Math.ceil((end - now) / 1000);
+                const color = type === 'rapidfire' ? 'text-purple-400' : 'text-cyan-400';
+                const icon = type === 'rapidfire' ? '⚡' : '⏩';
+                const name = type === 'rapidfire' ? 'RAPID FIRE' : 'SPEED BOOST';
+                return `<div class="flex justify-between items-center bg-black/40 px-3 py-1 rounded-lg border border-white/10 w-full mb-1">
+                        <span class="${color} font-bold text-xs">${icon} ${name}</span>
+                        <span class="text-white font-mono text-xs">${timeLeft}s</span>
+                    </div>`;
+              }).join('');
+
+              powerupContainerRef.current.style.opacity = active.length > 0 ? '1' : '0';
+            }
+
+          } else {
+            battlePanelRef.current.style.opacity = '0';
+            battlePanelRef.current.style.transform = 'translateY(-20px)';
+            if (respawnScreenRef.current) respawnScreenRef.current.style.display = 'none';
+            if (powerupContainerRef.current) powerupContainerRef.current.style.opacity = '0';
+          }
         }
       }
       rAFId = requestAnimationFrame(update);
@@ -242,7 +359,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
               </div>
             </div>
           </div>
-          
+
           {/* Race Mode HUD Panel */}
           <div
             ref={racePanelRef}
@@ -257,6 +374,37 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
               <div className="flex justify-between items-center w-36">
                 <span className="text-xs text-gray-300">CHECKPOINTS</span>
                 <span ref={raceRingsRef} className="text-2xl font-bold text-yellow-400">0</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Battle HUD Panel */}
+          <div
+            ref={battlePanelRef}
+            className="bg-gradient-to-r from-red-900/80 to-rose-900/80 backdrop-blur-md p-4 rounded-xl text-white border border-red-500/30 shadow-xl transition-all duration-500 opacity-0 -translate-y-4"
+          >
+            <div className="text-xs uppercase tracking-widest text-red-300 mb-2 border-b border-white/10 pb-1 flex justify-between">
+              <span>⚔️ BATTLE</span>
+              <span ref={teamIndicatorRef} className="font-bold hidden"></span>
+            </div>
+            <div className="flex flex-col gap-2 w-40">
+              {/* Powerups Container */}
+              <div ref={powerupContainerRef} className="flex flex-col transition-opacity duration-300"></div>
+              {/* HP Bar */}
+              <div className="w-full h-4 bg-black/50 rounded-full overflow-hidden border border-white/10 relative">
+                <div ref={hpBarRef} className="h-full bg-green-500 transition-all duration-300" style={{ width: '100%' }}></div>
+                <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold">HP</div>
+              </div>
+
+              {/* Ammo */}
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-gray-300">AMMO</span>
+                <span ref={ammoRef} className="text-xl font-black text-yellow-400 font-mono">20</span>
+              </div>
+
+              {/* Scores */}
+              <div className="mt-2 pt-2 border-t border-white/10">
+                <div ref={battleScoreRef} className="space-y-1"></div>
               </div>
             </div>
           </div>
@@ -312,7 +460,7 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
               </ul>
             )}
           </div>
-          
+
           {/* Multiplayer Status */}
           {multiplayer && (
             <div className="bg-black/30 backdrop-blur-md p-3 rounded-xl text-white border border-white/10 shadow-lg w-48">
@@ -333,28 +481,28 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
           {/* Lobby List */}
           {multiplayer?.connected && !multiplayer.inRace && multiplayer.activePortals && multiplayer.activePortals.length > 0 && (
             <div className="bg-black/30 backdrop-blur-md p-3 rounded-xl text-white border border-green-500/30 shadow-lg w-48 mt-2">
-                <div className="text-[10px] uppercase tracking-widest text-green-400 mb-2 border-b border-white/10 pb-1">
-                    Active Lobbies
-                </div>
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                    {multiplayer.activePortals.map(portal => (
-                        <div key={portal.lobbyId} className="bg-white/5 p-2 rounded flex flex-col gap-1">
-                            <div className="flex justify-between text-xs">
-                                <span className="font-bold truncate w-24">{portal.hostName}'s Race</span>
-                                <span className="text-gray-400">{portal.playerCount} 🐦</span>
-                            </div>
-                            <button 
-                                onClick={() => multiplayer.onJoinLobby?.(portal.lobbyId)}
-                                className="w-full bg-green-600 hover:bg-green-500 text-[10px] font-bold py-1 rounded text-center transition-colors uppercase tracking-wider"
-                            >
-                                Join
-                            </button>
-                        </div>
-                    ))}
-                </div>
+              <div className="text-[10px] uppercase tracking-widest text-green-400 mb-2 border-b border-white/10 pb-1">
+                Active Lobbies
+              </div>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {multiplayer.activePortals.map(portal => (
+                  <div key={portal.lobbyId} className="bg-white/5 p-2 rounded flex flex-col gap-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-bold truncate w-24">{portal.hostName}'s Race</span>
+                      <span className="text-gray-400">{portal.playerCount} 🐦</span>
+                    </div>
+                    <button
+                      onClick={() => multiplayer.onJoinLobby?.(portal.lobbyId)}
+                      className="w-full bg-green-600 hover:bg-green-500 text-[10px] font-bold py-1 rounded text-center transition-colors uppercase tracking-wider"
+                    >
+                      Join
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
-          
+
           {/* Race Leaderboard */}
           {multiplayer?.inRace && multiplayer.raceParticipants.length > 0 && (
             <div className="bg-gradient-to-b from-orange-900/80 to-red-900/80 backdrop-blur-md p-3 rounded-xl text-white border border-orange-500/30 shadow-lg w-48 mt-2">
@@ -365,8 +513,8 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
                 {[...multiplayer.raceParticipants]
                   .sort((a, b) => b.checkpoints - a.checkpoints)
                   .map((p, i) => (
-                    <div 
-                      key={p.id} 
+                    <div
+                      key={p.id}
                       className={`text-xs flex justify-between ${p.name === multiplayer.playerName ? 'text-yellow-300 font-bold' : 'text-gray-300'}`}
                     >
                       <span className="truncate max-w-[100px]">
@@ -384,6 +532,15 @@ export const HUD: React.FC<HUDProps> = ({ statsRef, multiplayer }) => {
       {/* Footer */}
       <div className="text-center text-white/30 text-xs">
         Procedural World Gen v1.2
+      </div>
+
+      {/* Respawn Screen */}
+      <div
+        ref={respawnScreenRef}
+        className="absolute inset-0 z-50 flex items-center justify-center bg-red-900/50 backdrop-blur-sm hidden flex-col gap-4"
+      >
+        <h2 className="text-6xl font-black text-red-500 tracking-widest drop-shadow-lg">YOU DIED</h2>
+        <div ref={respawnTimerRef} className="text-2xl text-white font-mono animate-pulse">PRESS R TO RESPAWN</div>
       </div>
     </div>
   );

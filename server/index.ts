@@ -46,6 +46,39 @@ interface Lobby {
   createdAt: number;
   countdown: number | null; // null = waiting, number = countdown seconds
   raceStarted: boolean;
+  mode: 'race' | 'battle';
+  battleType?: 'deathmatch' | 'ctf';
+}
+
+interface BattlePlayerState {
+  id: string;
+  name: string;
+  position: [number, number, number];
+  rotation: [number, number, number, number];
+  hp: number;
+  maxHp: number;
+  isDead: boolean;
+  team?: 'red' | 'blue';
+  ammo: number;
+  killCount: number;
+  deathCount: number;
+  lastRespawn: number;
+}
+
+interface BattleSession {
+  id: string;
+  players: Map<string, BattlePlayerState>;
+  mode: 'deathmatch' | 'ctf';
+  startTime: number;
+  isActive: boolean;
+  projectiles: Set<string>; // IDs
+  pickups: Map<string, { type: 'health' | 'ammo' | 'powerup', position: [number, number, number], active: boolean }>;
+  scores: { [key: string]: number }; // Team or Player ID -> Score
+  flag?: {
+    position: [number, number, number];
+    carrierId: string | null;
+    homeBase: { red: [number, number, number], blue: [number, number, number] };
+  };
 }
 
 interface RaceParticipantResult {
@@ -71,6 +104,7 @@ interface RaceSession {
 const players = new Map<string, PlayerState>();
 const lobbies = new Map<string, Lobby>();
 const races = new Map<string, RaceSession>();
+const battles = new Map<string, BattleSession>();
 // Simple persistent score store: Map<Fingerprint, Score>
 const globalScores = new Map<string, number>();
 
@@ -150,10 +184,22 @@ function handlePlayerLeave(playerId: string) {
 
     // Remove from race if in one
     if (player.raceId) {
-      const race = races.get(player.raceId);
-      if (race) {
-        race.players.delete(playerId);
-        io.to(`race:${player.raceId}`).emit('race:playerLeft', { playerId });
+      if (races.has(player.raceId)) {
+        const race = races.get(player.raceId);
+        if (race) {
+          race.players.delete(playerId);
+          io.to(`race:${player.raceId}`).emit('race:playerLeft', { playerId });
+        }
+      } else if (battles.has(player.raceId)) {
+        const battle = battles.get(player.raceId);
+        if (battle) {
+          battle.players.delete(playerId);
+          io.to(`battle:${player.raceId}`).emit('battle:playerLeft', { playerId });
+
+          if (battle.players.size === 0) {
+            battles.delete(player.raceId);
+          }
+        }
       }
     }
 
@@ -246,7 +292,7 @@ io.on('connection', (socket: Socket) => {
   // ========== LOBBY SYSTEM ==========
 
   // Create a new race lobby (host creates portal)
-  socket.on('lobby:create', (data: { position: [number, number, number] }) => {
+  socket.on('lobby:create', (data: { position: [number, number, number], mode?: 'race' | 'battle', battleType?: 'deathmatch' | 'ctf' }) => {
     const player = players.get(socket.id);
     if (!player || player.lobbyId) return;
 
@@ -259,7 +305,9 @@ io.on('connection', (socket: Socket) => {
       portalPosition: data.position,
       createdAt: Date.now(),
       countdown: null,
-      raceStarted: false
+      raceStarted: false,
+      mode: data.mode || 'race',
+      battleType: data.battleType
     };
 
     // Add host to lobby
@@ -369,8 +417,14 @@ io.on('connection', (socket: Socket) => {
       if (lobby.countdown <= 0) {
         clearInterval(countdownInterval);
 
-        // Start the race!
+        // Start the game!
         lobby.raceStarted = true;
+
+        if (lobby.mode === 'battle') {
+          startBattle(lobby);
+          return;
+        }
+
         const raceId = lobby.id;
         const seed = Math.floor(Math.random() * 1000000);
 
@@ -443,6 +497,107 @@ io.on('connection', (socket: Socket) => {
       }
     }, 1000);
   });
+
+  function startBattle(lobby: Lobby) {
+    const battleId = lobby.id;
+    const battle: BattleSession = {
+      id: battleId,
+      players: new Map(),
+      mode: lobby.battleType || 'deathmatch',
+      startTime: Date.now(),
+      isActive: true,
+      projectiles: new Set(),
+      pickups: new Map(),
+      scores: {}
+    };
+
+    // Initialize pickups (random positions around portal for now)
+    for (let i = 0; i < 10; i++) {
+      const id = generateId();
+      const offset = [
+        (Math.random() - 0.5) * 200,
+        (Math.random() - 0.5) * 50,
+        (Math.random() - 0.5) * 200
+      ];
+      battle.pickups.set(id, {
+        type: Math.random() > 0.8 ? 'powerup' : (Math.random() > 0.5 ? 'health' : 'ammo'),
+        position: [
+          lobby.portalPosition[0] + offset[0],
+          lobby.portalPosition[1] + offset[1],
+          lobby.portalPosition[2] + offset[2]
+        ],
+        active: true
+      });
+    }
+
+    // CTF Setup
+    if (battle.mode === 'ctf') {
+      battle.flag = {
+        position: [lobby.portalPosition[0], lobby.portalPosition[1] + 50, lobby.portalPosition[2]],
+        carrierId: null,
+        homeBase: {
+          red: [lobby.portalPosition[0] - 200, lobby.portalPosition[1], lobby.portalPosition[2]],
+          blue: [lobby.portalPosition[0] + 200, lobby.portalPosition[1], lobby.portalPosition[2]]
+        }
+      };
+      battle.scores = { red: 0, blue: 0 };
+    }
+
+    battles.set(battleId, battle);
+
+    // Move players
+    let teamToggle = false;
+    for (const [pid, lobbyPlayer] of lobby.players) {
+      const p = players.get(pid);
+      if (p) {
+        p.inRace = true; // Reusing inRace flag for "in game"
+        p.raceId = battleId; // Reusing raceId for "gameId"
+        p.lobbyId = null;
+
+        const team = battle.mode === 'ctf' ? (teamToggle ? 'red' : 'blue') : undefined;
+        teamToggle = !teamToggle;
+
+        battle.players.set(pid, {
+          id: pid,
+          name: p.name,
+          position: p.position,
+          rotation: p.rotation,
+          hp: 100,
+          maxHp: 100,
+          isDead: false,
+          team: team,
+          ammo: 20,
+          killCount: 0,
+          deathCount: 0,
+          lastRespawn: Date.now()
+        });
+
+        if (battle.mode === 'deathmatch') {
+          battle.scores[pid] = 0;
+        }
+
+        const playerSocket = io.sockets.sockets.get(pid);
+        if (playerSocket) {
+          playerSocket.leave(`lobby:${lobby.id}`);
+          playerSocket.join(`battle:${battleId}`);
+        }
+      }
+    }
+
+    // Notify start
+    io.to(`battle:${battleId}`).emit('battle:start', {
+      battleId,
+      mode: battle.mode,
+      players: Array.from(battle.players.values()),
+      pickups: Array.from(battle.pickups.entries()),
+      flag: battle.flag,
+      scores: battle.scores
+    });
+
+    // Remove portal
+    broadcastPortals();
+    console.log(`Battle ${battleId} started (${battle.mode})`);
+  }
 
   // Leave lobby
   socket.on('lobby:leave', () => {
@@ -678,6 +833,254 @@ io.on('connection', (socket: Socket) => {
       }
       races.delete(race.id);
       console.log(`Race ${race.id} won by ${player.name}`);
+    }
+  });
+
+  // ========== BATTLE SYSTEM ==========
+
+  socket.on('battle:shoot', (data: { position: [number, number, number], velocity: [number, number, number], type: 'normal' | 'explosive' }) => {
+    const player = players.get(socket.id);
+    if (!player || !player.raceId) return;
+
+    const battle = battles.get(player.raceId);
+    if (!battle) return;
+
+    const battlePlayer = battle.players.get(socket.id);
+    if (!battlePlayer || battlePlayer.isDead || battlePlayer.ammo <= 0) return;
+
+    // Deduct ammo
+    battlePlayer.ammo--;
+
+    const projectileId = generateId();
+    // We don't track projectile physics on server for now, just broadcast spawn
+    // Clients will simulate it.
+
+    io.to(`battle:${battle.id}`).emit('battle:projectile', {
+      id: projectileId,
+      ownerId: socket.id,
+      position: data.position,
+      velocity: data.velocity,
+      type: data.type
+    });
+
+    // Notify ammo update
+    socket.emit('battle:ammo', { ammo: battlePlayer.ammo });
+  });
+
+  socket.on('battle:hit', (data: { targetId: string, damage: number }) => {
+    const shooter = players.get(socket.id);
+    if (!shooter || !shooter.raceId) return;
+
+    const battle = battles.get(shooter.raceId);
+    if (!battle) return;
+
+    const target = battle.players.get(data.targetId);
+    if (!target || target.isDead) return;
+
+    // Apply damage
+    target.hp = Math.max(0, target.hp - data.damage);
+
+    io.to(`battle:${battle.id}`).emit('battle:damage', {
+      targetId: data.targetId,
+      hp: target.hp,
+      damage: data.damage,
+      shooterId: socket.id
+    });
+
+    if (target.hp <= 0) {
+      target.isDead = true;
+      target.deathCount++;
+
+      const shooterPlayer = battle.players.get(socket.id);
+      if (shooterPlayer) {
+        shooterPlayer.killCount++;
+
+        // Update score
+        if (battle.mode === 'deathmatch') {
+          battle.scores[socket.id] = (battle.scores[socket.id] || 0) + 1;
+        }
+      }
+
+      // Drop flag if carrying
+      if (battle.flag && battle.flag.carrierId === data.targetId) {
+        battle.flag.carrierId = null;
+        // We need target position. It's not in 'data', but it's in 'target' state (which might be slightly old but ok)
+        // Actually target.position is available on server state
+        battle.flag.position = [...target.position];
+        io.to(`battle:${battle.id}`).emit('battle:flagUpdate', { flag: battle.flag });
+      }
+
+      io.to(`battle:${battle.id}`).emit('battle:kill', {
+        victimId: data.targetId,
+        killerId: socket.id,
+        scores: battle.scores
+      });
+    }
+  });
+
+  socket.on('battle:respawn', () => {
+    const player = players.get(socket.id);
+    if (!player || !player.raceId) return;
+
+    const battle = battles.get(player.raceId);
+    if (!battle) return;
+
+    const battlePlayer = battle.players.get(socket.id);
+    if (!battlePlayer || !battlePlayer.isDead) return;
+
+    // Reset stats
+    battlePlayer.isDead = false;
+    battlePlayer.hp = battlePlayer.maxHp;
+    battlePlayer.ammo = 20; // Reset ammo on respawn? Or keep low? Let's reset.
+    battlePlayer.lastRespawn = Date.now();
+
+    // Pick random spawn point near center/base
+    // For now just random box
+    const spawnPos: [number, number, number] = [
+      (Math.random() - 0.5) * 200,
+      350 + (Math.random() * 50),
+      (Math.random() - 0.5) * 200
+    ];
+
+    io.to(`battle:${battle.id}`).emit('battle:respawned', {
+      playerId: socket.id,
+      position: spawnPos,
+      hp: battlePlayer.hp,
+      ammo: battlePlayer.ammo
+    });
+  });
+
+  socket.on('battle:pickup', (data: { pickupId: string }) => {
+    const player = players.get(socket.id);
+    if (!player || !player.raceId) return;
+
+    const battle = battles.get(player.raceId);
+    if (!battle) return;
+
+    const pickup = battle.pickups.get(data.pickupId);
+    if (!pickup || !pickup.active) return;
+
+    const battlePlayer = battle.players.get(socket.id);
+    if (!battlePlayer || battlePlayer.isDead) return;
+
+    // Apply effect
+    if (pickup.type === 'health') {
+      battlePlayer.hp = Math.min(battlePlayer.maxHp, battlePlayer.hp + 50);
+    } else if (pickup.type === 'ammo') {
+      battlePlayer.ammo += 10;
+    } else if (pickup.type === 'powerup') {
+      const effect = Math.random() > 0.5 ? 'rapidfire' : 'speedboost';
+      socket.emit('battle:powerup', { effect, duration: 10000 });
+    }
+
+    // Deactivate pickup
+    pickup.active = false;
+
+    io.to(`battle:${battle.id}`).emit('battle:pickupTaken', {
+      pickupId: data.pickupId,
+      playerId: socket.id,
+      type: pickup.type
+    });
+
+    // Respawn pickup after delay
+    setTimeout(() => {
+      if (battles.has(battle.id)) {
+        pickup.active = true;
+        io.to(`battle:${battle.id}`).emit('battle:pickupRespawn', {
+          pickupId: data.pickupId
+        });
+      }
+    }, 10000);
+  });
+
+  socket.on('battle:flagPickup', () => {
+    const player = players.get(socket.id);
+    if (!player || !player.raceId) return;
+    const battle = battles.get(player.raceId);
+    if (!battle || !battle.flag) return;
+
+    // Check if already carried
+    if (battle.flag.carrierId) return;
+
+    // Check distance (simple server validation using last known pos)
+    const dist = Math.sqrt(
+      Math.pow(player.position[0] - battle.flag.position[0], 2) +
+      Math.pow(player.position[1] - battle.flag.position[1], 2) +
+      Math.pow(player.position[2] - battle.flag.position[2], 2)
+    );
+
+    if (dist < 20) { // Pickup radius
+      battle.flag.carrierId = socket.id;
+      io.to(`battle:${battle.id}`).emit('battle:flagUpdate', { flag: battle.flag });
+    }
+  });
+
+  socket.on('battle:steal', (data: { targetId: string }) => {
+    const player = players.get(socket.id);
+    if (!player || !player.raceId) return;
+    const battle = battles.get(player.raceId);
+    if (!battle || !battle.flag || !battle.flag.carrierId) return;
+
+    // Must be stealing from the current carrier
+    if (battle.flag.carrierId !== data.targetId) return;
+
+    // Check distance between thief (socket.id) and carrier (targetId)
+    const carrier = battle.players.get(data.targetId);
+    // We need the carrier's position. We can get it from the main players map.
+    const carrierPlayer = players.get(data.targetId);
+
+    if (!carrierPlayer) return;
+
+    const dist = Math.sqrt(
+      Math.pow(player.position[0] - carrierPlayer.position[0], 2) +
+      Math.pow(player.position[1] - carrierPlayer.position[1], 2) +
+      Math.pow(player.position[2] - carrierPlayer.position[2], 2)
+    );
+
+    // Steal radius (slightly larger than pickup to make it feel responsive on collision)
+    if (dist < 15) {
+      battle.flag.carrierId = socket.id;
+      io.to(`battle:${battle.id}`).emit('battle:flagUpdate', { flag: battle.flag });
+
+      // Optional: Notify of steal?
+      // io.to(`battle:${battle.id}`).emit('battle:notification', { message: `${player.name} stole the egg!` });
+    }
+  });
+
+  socket.on('battle:score', () => {
+    const player = players.get(socket.id);
+    if (!player || !player.raceId) return;
+    const battle = battles.get(player.raceId);
+    if (!battle || !battle.flag || !battle.flag.homeBase) return;
+
+    // Must be carrier
+    if (battle.flag.carrierId !== socket.id) return;
+
+    const battlePlayer = battle.players.get(socket.id);
+    if (!battlePlayer || !battlePlayer.team) return;
+
+    // Target is OPPOSITE goal
+    const targetBase = battlePlayer.team === 'red' ? battle.flag.homeBase.blue : battle.flag.homeBase.red;
+
+    // Check distance to goal
+    const dist = Math.sqrt(
+      Math.pow(player.position[0] - targetBase[0], 2) +
+      Math.pow(player.position[1] - targetBase[1], 2) +
+      Math.pow(player.position[2] - targetBase[2], 2)
+    );
+
+    if (dist < 20) { // Goal radius
+      // Score!
+      battle.scores[battlePlayer.team] = (battle.scores[battlePlayer.team] || 0) + 1;
+
+      // Reset flag
+      battle.flag.carrierId = null;
+      battle.flag.position = [0, 350, 0]; // Reset to center (approx) - ideally use original spawn
+      // We lost original spawn. Let's use 0,350,0 or try to store it.
+      // For now, center is fine.
+
+      io.to(`battle:${battle.id}`).emit('battle:scoreUpdate', { scores: battle.scores });
+      io.to(`battle:${battle.id}`).emit('battle:flagUpdate', { flag: battle.flag });
     }
   });
 

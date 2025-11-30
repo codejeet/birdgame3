@@ -13,6 +13,7 @@ import { RingManager } from './RingManager';
 import { WaterEffects } from './WaterEffects';
 import { AudioController, AudioHandle } from './AudioController';
 import { OtherPlayers } from './OtherPlayers';
+import { BattleManager } from './BattleManager';
 import { RacePortals } from './RacePortal';
 import { VictoryScreen } from './VictoryScreen';
 import { useMultiplayer } from '../utils/multiplayer';
@@ -57,7 +58,7 @@ const Clouds = React.memo(() => (
 ));
 
 // Navigation Arrow Component
-const NavArrow = React.memo(({ birdPos, targetRef }: { birdPos: Vector3, targetRef: React.MutableRefObject<Vector3 | null> }) => {
+const NavArrow = React.memo(({ birdPos, targetRef, colorTop = '#ffff00', colorBottom = '#ff0066' }: { birdPos: Vector3, targetRef: React.MutableRefObject<Vector3 | null>, colorTop?: string, colorBottom?: string }) => {
   const groupRef = useRef<Group>(null);
 
   useFrame((state) => {
@@ -81,8 +82,8 @@ const NavArrow = React.memo(({ birdPos, targetRef }: { birdPos: Vector3, targetR
   // Gradient Shader Material
   const gradientMaterial = useMemo(() => ({
     uniforms: {
-      colorTop: { value: new Color('#ffff00') },   // Yellow Tip
-      colorBottom: { value: new Color('#ff0066') } // Pink Base
+      colorTop: { value: new Color(colorTop) },
+      colorBottom: { value: new Color(colorBottom) }
     },
     vertexShader: `
           varying vec2 vUv;
@@ -102,7 +103,7 @@ const NavArrow = React.memo(({ birdPos, targetRef }: { birdPos: Vector3, targetR
             gl_FragColor = vec4(color, 1.0);
           }
         `
-  }), []);
+  }), [colorTop, colorBottom]);
 
   return (
     <group ref={groupRef}>
@@ -143,13 +144,13 @@ const LobbyArrow = React.memo(({ birdPos, portals }: { birdPos: Vector3, portals
     if (closestPortal) {
       targetRef.current = closestPortal;
       groupRef.current.visible = true;
-      
+
       // Position above bird
       const arrowPos = birdPos.clone().add(new Vector3(0, 8, 0));
       groupRef.current.position.lerp(arrowPos, 0.2);
       groupRef.current.lookAt(closestPortal);
     } else {
-        groupRef.current.visible = false;
+      groupRef.current.visible = false;
     }
   });
 
@@ -183,26 +184,28 @@ export const GameScene: React.FC = () => {
 
   // Shared ref for target ring position (for the arrow)
   const targetRingRef = useRef<Vector3 | null>(null);
+  const eggTargetRef = useRef<Vector3 | null>(null);
 
   const [isPaused, setIsPaused] = useState(false);
   const [isPointerLocked, setIsPointerLocked] = useState(false);
   const [showModeSelect, setShowModeSelect] = useState(false);
+  const [showBattleSelect, setShowBattleSelect] = useState(false);
   const [pendingRacePortalPosition, setPendingRacePortalPosition] = useState<[number, number, number] | null>(null);
   const [teleportTarget, setTeleportTarget] = useState<[number, number, number] | null>(null);
   const [teleportRotation, setTeleportRotation] = useState<[number, number, number, number] | null>(null);
 
   const audioRef = useRef<AudioHandle>(null);
-  
+
   // Multiplayer
   const multiplayer = useMultiplayer();
-  
+
   // Check if player is frozen (in lobby waiting)
   const isInLobby = multiplayer.lobby !== null && !multiplayer.inRace;
 
   const handleShowModeSelect = useCallback(() => {
     setShowModeSelect(true);
     document.exitPointerLock();
-    
+
     // Store position for portal - spawn it higher and further forward so players don't fly in accidentally
     const pos = birdPosRef.current;
     const forward = new Vector3(0, 0, 1).applyQuaternion(birdRotRef.current);
@@ -212,26 +215,40 @@ export const GameScene: React.FC = () => {
     setPendingRacePortalPosition([portalPos.x, portalPos.y, portalPos.z]);
   }, []);
 
-  const handleModeSelect = useCallback((mode: RingGameMode) => {
+  const handleModeSelect = useCallback((mode: RingGameMode | 'battle') => {
     if (statsRef.current) {
+      if (mode === 'battle') {
+        setShowBattleSelect(true);
+        return;
+      }
+
       if (mode === 'race' && pendingRacePortalPosition) {
         // Create a lobby instead of starting immediately
-        multiplayer.createLobby(pendingRacePortalPosition);
+        multiplayer.createLobby(pendingRacePortalPosition, 'race');
         setShowModeSelect(false);
         // Teleport host to the portal position
         setTeleportTarget(pendingRacePortalPosition);
         return;
       }
-      
+
       // For non-race modes, start immediately
-      statsRef.current.ringGameMode = mode;
+      statsRef.current.ringGameMode = mode as RingGameMode;
       statsRef.current.isRingGameActive = true;
       setShowModeSelect(false);
       document.body.requestPointerLock();
       audioRef.current?.playGameStart();
     }
   }, [multiplayer, pendingRacePortalPosition]);
-  
+
+  const handleBattleStart = useCallback((type: 'deathmatch' | 'ctf') => {
+    if (pendingRacePortalPosition) {
+      multiplayer.createLobby(pendingRacePortalPosition, 'battle', type);
+      setShowModeSelect(false);
+      setShowBattleSelect(false);
+      setTeleportTarget(pendingRacePortalPosition);
+    }
+  }, [multiplayer, pendingRacePortalPosition]);
+
   // Handle portal entry (joining someone else's lobby)
   const handleEnterPortal = useCallback((lobbyId: string) => {
     // Find the portal position and teleport there
@@ -241,18 +258,18 @@ export const GameScene: React.FC = () => {
     }
     multiplayer.joinLobby(lobbyId);
   }, [multiplayer]);
-  
+
   // Handle starting the race from lobby
   const handleStartRace = useCallback(() => {
     multiplayer.startRace();
   }, [multiplayer]);
-  
+
   // Handle leaving the lobby
   const handleLeaveLobby = useCallback(() => {
     multiplayer.leaveLobby();
     setTeleportTarget(null); // Clear any teleport state
   }, [multiplayer]);
-  
+
   // When race actually starts from lobby
   useEffect(() => {
     // Wait for BOTH inRace and raceStartPosition to be available before initializing
@@ -261,12 +278,12 @@ export const GameScene: React.FC = () => {
       statsRef.current.isRingGameActive = true;
       document.body.requestPointerLock();
       audioRef.current?.playGameStart();
-      
+
       // Teleport to race start position (in front of where the portal was)
       setTeleportTarget(multiplayer.raceStartPosition);
       // Force rotation to face +Z (same as RingManager's assumption)
       setTeleportRotation([0, 0, 0, 1]);
-      
+
       // Clear teleport after a short delay so it doesn't interfere with gameplay
       setTimeout(() => {
         setTeleportTarget(null);
@@ -277,14 +294,14 @@ export const GameScene: React.FC = () => {
 
   const handleBirdMove = useCallback((pos: Vector3) => {
     birdPosRef.current.copy(pos);
-    
+
     // Send position to server
     multiplayer.updatePosition(
       [pos.x, pos.y, pos.z],
       [birdRotRef.current.x, birdRotRef.current.y, birdRotRef.current.z, birdRotRef.current.w]
     );
   }, [multiplayer]);
-  
+
   // Handle game over (leave race)
   const handleGameOver = useCallback(() => {
     if (multiplayer.inRace) {
@@ -299,22 +316,22 @@ export const GameScene: React.FC = () => {
 
   const handleRaceWin = useCallback(() => {
     if (multiplayer.inRace) {
-        multiplayer.winRace();
-        // Don't clear state here yet, wait for results screen? 
-        // Actually we want to keep flying or stop? 
-        // For now, let the victory screen handle the "Return to Lobby" which will clear state.
+      multiplayer.winRace();
+      // Don't clear state here yet, wait for results screen? 
+      // Actually we want to keep flying or stop? 
+      // For now, let the victory screen handle the "Return to Lobby" which will clear state.
     }
   }, [multiplayer]);
 
   // Clean up when race ends (triggered by multiplayer hook state change)
   useEffect(() => {
-      // If we are locally in race mode but multiplayer says race ended
-      if (!multiplayer.inRace && statsRef.current.ringGameMode === 'race') {
-          statsRef.current.isRingGameActive = false;
-          statsRef.current.ringGameMode = 'skyward'; // Reset mode to default
-          statsRef.current.raceRingsCollected = 0;
-          statsRef.current.raceTimeRemaining = 0;
-      }
+    // If we are locally in race mode but multiplayer says race ended
+    if (!multiplayer.inRace && statsRef.current.ringGameMode === 'race') {
+      statsRef.current.isRingGameActive = false;
+      statsRef.current.ringGameMode = 'skyward'; // Reset mode to default
+      statsRef.current.raceRingsCollected = 0;
+      statsRef.current.raceTimeRemaining = 0;
+    }
   }, [multiplayer.inRace]);
 
   const handleCollect = useCallback(() => {
@@ -325,6 +342,53 @@ export const GameScene: React.FC = () => {
   const handleFlap = useCallback(() => {
     audioRef.current?.playFlap();
   }, []);
+
+  // Calculate speed multiplier from powerups
+  const speedMultiplier = useMemo(() => {
+    if (multiplayer.activePowerups.has('speedboost')) {
+      const endTime = multiplayer.activePowerups.get('speedboost')!;
+      if (endTime > Date.now()) return 1.5;
+    }
+    return 1.0;
+  }, [multiplayer.activePowerups]); // activePowerups is a new Map on update
+
+  // Update egg target
+  useEffect(() => {
+    if (multiplayer.battle?.mode === 'ctf' && multiplayer.battle.flag?.position) {
+      // If I am carrying it, point to goal?
+      // If someone else is carrying it, point to them?
+      // If dropped, point to it.
+      // For now, just point to flag position (which is updated on carrier move if we implemented that? 
+      // Wait, server only updates flag position on Drop. 
+      // If carried, flag position in battle state might be stale or null?
+      // Server sends flag: { position, carrierId }.
+      // CTF Nav Arrow Logic
+      if (multiplayer.battle?.mode === 'ctf' && multiplayer.battle.flag) {
+        const flag = multiplayer.battle.flag;
+        const myTeam = multiplayer.battle.myTeam;
+
+        if (flag.carrierId === multiplayer.playerId) {
+          // I have the flag -> Point to Enemy Goal
+          if (myTeam && flag.homeBase) {
+            const targetBase = myTeam === 'red' ? flag.homeBase.blue : flag.homeBase.red;
+            eggTargetRef.current = new Vector3(...targetBase);
+          }
+        } else if (flag.carrierId) {
+          // Someone else has the flag
+          const carrier = multiplayer.players.get(flag.carrierId);
+          if (carrier) {
+            // Point to carrier
+            eggTargetRef.current = new Vector3(...carrier.position);
+          }
+        } else {
+          // Flag is dropped/neutral -> Point to Flag
+          eggTargetRef.current = new Vector3(...flag.position);
+        }
+      }
+    } else {
+      eggTargetRef.current = null;
+    }
+  }, [multiplayer.battle, multiplayer.players, multiplayer.playerId]);
 
   // Pointer Lock and Pause Logic
   useEffect(() => {
@@ -368,8 +432,8 @@ export const GameScene: React.FC = () => {
 
   return (
     <>
-      <HUD 
-        statsRef={statsRef} 
+      <HUD
+        statsRef={statsRef}
         multiplayer={{
           connected: multiplayer.connected,
           playerName: multiplayer.playerName,
@@ -378,7 +442,14 @@ export const GameScene: React.FC = () => {
           raceParticipants: multiplayer.raceParticipants,
           score: multiplayer.playerScore,
           activePortals: multiplayer.activePortals,
-          onJoinLobby: handleEnterPortal
+          onJoinLobby: handleEnterPortal,
+          battle: multiplayer.battle,
+          projectiles: multiplayer.projectiles,
+          pickups: multiplayer.pickups,
+          shoot: multiplayer.shoot,
+          reportHit: multiplayer.reportHit,
+          respawn: multiplayer.respawn,
+          collectPickup: multiplayer.collectPickup
         }}
       />
       <AudioController ref={audioRef} isPaused={isPaused} />
@@ -414,35 +485,77 @@ export const GameScene: React.FC = () => {
             <h2 className="text-4xl font-black text-white mb-2 tracking-wider drop-shadow-lg italic">SELECT MODE</h2>
             <p className="text-blue-200 mb-8 text-lg">Choose your challenge</p>
 
-            <div className="grid grid-cols-3 gap-6">
+            <div className="grid grid-cols-4 gap-4">
               <button
                 onClick={() => handleModeSelect('mountain')}
-                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-yellow-400 rounded-2xl transition-all text-left"
+                className="group relative overflow-hidden p-4 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-yellow-400 rounded-2xl transition-all text-left"
               >
-                <div className="text-2xl font-bold text-yellow-400 mb-2 group-hover:scale-105 transition-transform">MOUNTAIN RUNNER</div>
-                <div className="text-sm text-gray-300">Weave between treacherous mountain peaks. High intensity low-altitude flying.</div>
+                <div className="text-xl font-bold text-yellow-400 mb-2 group-hover:scale-105 transition-transform">MOUNTAIN</div>
+                <div className="text-xs text-gray-300">Weave between treacherous mountain peaks.</div>
               </button>
 
               <button
                 onClick={() => handleModeSelect('skyward')}
-                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-400 rounded-2xl transition-all text-left"
+                className="group relative overflow-hidden p-4 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-400 rounded-2xl transition-all text-left"
               >
-                <div className="text-2xl font-bold text-cyan-400 mb-2 group-hover:scale-105 transition-transform">SKYWARD</div>
-                <div className="text-sm text-gray-300">Soar through the clouds in a classic high-altitude endurance test.</div>
+                <div className="text-xl font-bold text-cyan-400 mb-2 group-hover:scale-105 transition-transform">SKYWARD</div>
+                <div className="text-xs text-gray-300">Soar through the clouds in a classic high-altitude test.</div>
               </button>
 
               <button
                 onClick={() => handleModeSelect('race')}
-                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-green-400 rounded-2xl transition-all text-left"
+                className="group relative overflow-hidden p-4 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-green-400 rounded-2xl transition-all text-left"
               >
-                <div className="text-2xl font-bold text-green-400 mb-2 group-hover:scale-105 transition-transform">🏁 RACE LOBBY</div>
-                <div className="text-sm text-gray-300">Create a portal! Other birds can fly through to join your race.</div>
+                <div className="text-xl font-bold text-green-400 mb-2 group-hover:scale-105 transition-transform">🏁 RACE</div>
+                <div className="text-xs text-gray-300">Create a portal! Other birds can fly through to join.</div>
+              </button>
+
+              <button
+                onClick={() => handleModeSelect('battle')}
+                className="group relative overflow-hidden p-4 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-red-500 rounded-2xl transition-all text-left"
+              >
+                <div className="text-xl font-bold text-red-500 mb-2 group-hover:scale-105 transition-transform">⚔️ BATTLE</div>
+                <div className="text-xs text-gray-300">PVP Combat! Deathmatch & CTF modes.</div>
               </button>
             </div>
           </div>
         </div>
       )}
-      
+
+      {showBattleSelect && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
+          <div className="bg-gradient-to-b from-red-900 to-rose-900 p-12 rounded-3xl border border-red-500/30 text-center shadow-2xl transform transition-all max-w-2xl w-full">
+            <h2 className="text-4xl font-black text-white mb-2 tracking-wider drop-shadow-lg italic">BATTLE MODE</h2>
+            <p className="text-red-200 mb-8 text-lg">Choose your battlefield</p>
+
+            <div className="grid grid-cols-2 gap-6">
+              <button
+                onClick={() => handleBattleStart('deathmatch')}
+                className="group relative overflow-hidden p-6 bg-black/20 hover:bg-black/40 border border-red-500/30 hover:border-red-400 rounded-2xl transition-all text-left"
+              >
+                <div className="text-2xl font-bold text-red-400 mb-2 group-hover:scale-105 transition-transform">💀 DEATHMATCH</div>
+                <div className="text-sm text-gray-300">Free for all. Last bird flying wins.</div>
+              </button>
+
+              <button
+                onClick={() => handleBattleStart('ctf')}
+                className="group relative overflow-hidden p-6 bg-black/20 hover:bg-black/40 border border-blue-500/30 hover:border-blue-400 rounded-2xl transition-all text-left"
+              >
+                <div className="text-2xl font-bold text-blue-400 mb-2 group-hover:scale-105 transition-transform">🚩 CAPTURE THE EGG</div>
+                <div className="text-sm text-gray-300">Team based. Steal the enemy egg and bring it home.</div>
+              </button>
+            </div>
+
+            <button
+              onClick={() => setShowBattleSelect(false)}
+              className="mt-8 text-white/50 hover:text-white text-sm underline"
+            >
+              Back
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Race Lobby Waiting Screen */}
       {multiplayer.lobby && !multiplayer.inRace && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
@@ -461,22 +574,21 @@ export const GameScene: React.FC = () => {
                   {multiplayer.lobby.isHost ? '🏁 YOUR RACE LOBBY' : '🏁 RACE LOBBY'}
                 </h2>
                 <p className="text-green-300 mb-6">
-                  {multiplayer.lobby.isHost 
-                    ? 'A portal has appeared! Wait for others to join.' 
+                  {multiplayer.lobby.isHost
+                    ? 'A portal has appeared! Wait for others to join.'
                     : `Joined ${multiplayer.lobby.players.find(p => p.isHost)?.name}'s race`
                   }
                 </p>
-                
+
                 {/* Player list */}
                 <div className="bg-black/30 rounded-xl p-4 mb-6">
                   <div className="text-sm text-green-400 uppercase tracking-widest mb-3">Players ({multiplayer.lobby.players.length})</div>
                   <div className="space-y-2 max-h-48 overflow-y-auto">
                     {multiplayer.lobby.players.map(player => (
-                      <div 
+                      <div
                         key={player.id}
-                        className={`flex items-center justify-between p-2 rounded-lg ${
-                          player.id === multiplayer.playerId ? 'bg-green-800/50' : 'bg-black/20'
-                        }`}
+                        className={`flex items-center justify-between p-2 rounded-lg ${player.id === multiplayer.playerId ? 'bg-green-800/50' : 'bg-black/20'
+                          }`}
                       >
                         <span className="text-white font-medium">
                           {player.isHost && '👑 '}{player.name}
@@ -489,7 +601,7 @@ export const GameScene: React.FC = () => {
                     ))}
                   </div>
                 </div>
-                
+
                 {/* Actions */}
                 <div className="flex gap-4 justify-center">
                   {multiplayer.lobby.isHost ? (
@@ -522,7 +634,7 @@ export const GameScene: React.FC = () => {
       )}
 
       {multiplayer.raceResults && (
-        <VictoryScreen 
+        <VictoryScreen
           results={multiplayer.raceResults.map(r => ({ ...r, isLocal: r.id === multiplayer.playerId }))}
           onClose={() => multiplayer.clearRaceResults()}
         />
@@ -572,6 +684,8 @@ export const GameScene: React.FC = () => {
           teleportRotation={teleportRotation}
           frozen={isInLobby}
           raceStartPosition={multiplayer.inRace ? multiplayer.raceStartPosition : null}
+          speedMultiplier={speedMultiplier}
+          disableClickToFlap={multiplayer.battle?.isActive}
         />
 
         <Collectibles
@@ -580,40 +694,63 @@ export const GameScene: React.FC = () => {
           isPaused={isPaused || showModeSelect}
         />
 
-        <RingManager
-          birdPosition={birdPosRef.current}
-          birdRotation={birdRotRef.current}
-          statsRef={statsRef}
-          audioRef={audioRef}
-          isPaused={isPaused || showModeSelect}
-          targetRingRef={targetRingRef}
-          onShowModeSelect={handleShowModeSelect}
-          onGameOver={handleGameOver}
-          onRaceWin={handleRaceWin}
-          onCheckpoint={multiplayer.updateCheckpoint}
-          raceStartPosition={multiplayer.raceStartPosition}
-          raceSeed={multiplayer.raceSeed}
-          clearRings={isInLobby}
-        />
+        {!multiplayer.battle?.isActive && (
+          <RingManager
+            birdPosition={birdPosRef.current}
+            birdRotation={birdRotRef.current}
+            statsRef={statsRef}
+            audioRef={audioRef}
+            isPaused={isPaused || showModeSelect}
+            targetRingRef={targetRingRef}
+            onShowModeSelect={handleShowModeSelect}
+            onGameOver={handleGameOver}
+            onRaceWin={handleRaceWin}
+            onCheckpoint={multiplayer.updateCheckpoint}
+            raceStartPosition={multiplayer.raceStartPosition}
+            raceSeed={multiplayer.raceSeed}
+            clearRings={isInLobby}
+          />
+        )}
 
         <WaterEffects
           birdPosRef={birdPosRef}
           isPaused={isPaused || showModeSelect}
         />
 
-        <NavArrow birdPos={birdPosRef.current} targetRef={targetRingRef} />
-        
+        <BattleManager
+          birdPosition={birdPosRef.current}
+          birdRotation={birdRotRef.current}
+          myPlayerId={multiplayer.playerId}
+          battle={multiplayer.battle}
+          players={multiplayer.players}
+          projectiles={multiplayer.projectiles}
+          pickups={multiplayer.pickups}
+          activePowerups={multiplayer.activePowerups}
+          onShoot={multiplayer.shoot}
+          onCollectPickup={multiplayer.collectPickup}
+          onPickupFlag={multiplayer.pickupFlag}
+          onStealFlag={multiplayer.stealFlag}
+          onScore={multiplayer.score}
+          isPaused={isPaused || showModeSelect}
+        />
+
+        {!multiplayer.battle?.isActive && (
+          <NavArrow birdPos={birdPosRef.current} targetRef={targetRingRef} />
+        )}
+        <NavArrow birdPos={birdPosRef.current} targetRef={eggTargetRef} colorTop="#ffffff" colorBottom="#ffcc00" />
+
         {/* Lobby Waypoint Arrow */}
         {!multiplayer.inRace && !isInLobby && (
-            <LobbyArrow birdPos={birdPosRef.current} portals={multiplayer.activePortals} />
+          <LobbyArrow birdPos={birdPosRef.current} portals={multiplayer.activePortals} />
         )}
-        
+
         {/* Other multiplayer birds */}
-        <OtherPlayers 
-          players={multiplayer.players} 
-          localPlayerId={multiplayer.playerId} 
+        <OtherPlayers
+          players={multiplayer.players}
+          localPlayerId={multiplayer.playerId}
+          battle={multiplayer.battle}
         />
-        
+
         {/* Race portals from other players' lobbies */}
         <RacePortals
           portals={multiplayer.activePortals}

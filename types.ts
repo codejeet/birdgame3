@@ -35,6 +35,7 @@ export interface ControlsState {
   flap: boolean;
   dive: boolean;
   reset: boolean;
+  shoot: boolean;
   mouseDown: boolean;
   mouseX: number;
   mouseY: number;
@@ -67,6 +68,14 @@ export interface RemotePlayer {
   rotation: [number, number, number, number]; // Quaternion wxyz
   inRace: boolean;
   raceCheckpoints: number;
+  // Battle stats
+  hp?: number;
+  maxHp?: number;
+  isDead?: boolean;
+  team?: 'red' | 'blue';
+  ammo?: number;
+  killCount?: number;
+  deathCount?: number;
 }
 
 export interface RaceParticipant {
@@ -110,4 +119,57 @@ export interface MultiplayerState {
   // Lobby state
   lobby: LobbyState | null;
   activePortals: RacePortalData[];
+  // Battle state
+  battle: BattleState | null;
+}
+
+// Battle Mode Types
+export type BattleModeType = 'deathmatch' | 'ctf';
+
+export interface BattleState {
+  isActive: boolean;
+  mode: BattleModeType;
+  timeLeft: number;
+  scores: { [teamOrPlayerId: string]: number }; // Team ID or Player ID -> Score
+  myTeam?: 'red' | 'blue'; // For CTF
+  flag?: {
+    position: [number, number, number];
+    carrierId: string | null;
+    homeBase: {
+      red: [number, number, number];
+      blue: [number, number, number];
+    };
+  };
+  respawnTime?: number; // If dead, seconds until respawn
+}
+
+export interface BattlePlayer extends RemotePlayer {
+  hp: number;
+  maxHp: number;
+  isDead: boolean;
+  team?: 'red' | 'blue';
+  ammo: number;
+  killCount: number;
+  deathCount: number;
+}
+
+export interface Projectile {
+  id: string;
+  ownerId: string;
+  position: [number, number, number];
+  velocity: [number, number, number];
+  type: 'normal' | 'explosive';
+  createdAt: number;
+}
+
+export interface BattlePickup {
+  id: string;
+  type: 'health' | 'ammo' | 'powerup';
+  position: [number, number, number];
+  active: boolean;
+}
+
+export interface BattleLobbyState extends LobbyState {
+  mode: 'race' | 'battle';
+  battleType?: BattleModeType;
 }

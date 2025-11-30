@@ -16,13 +16,15 @@ interface BirdProps {
     teleportRotation?: [number, number, number, number] | null;
     frozen?: boolean;
     raceStartPosition?: [number, number, number] | null;
+    speedMultiplier?: number;
+    disableClickToFlap?: boolean;
 }
 
 type BirdMode = 'flying' | 'walking';
 
 const WATER_LEVEL = 10;
 
-export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rotationRef, teleportTarget, teleportRotation, frozen, raceStartPosition }: BirdProps) => {
+export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rotationRef, teleportTarget, teleportRotation, frozen, raceStartPosition, speedMultiplier = 1, disableClickToFlap = false }: BirdProps) => {
     const birdRef = useRef<Group>(null);
     const { camera } = useThree();
     const controls = useControls();
@@ -37,7 +39,7 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
     const speed = useRef(0.5); // Forward speed for flying
     const velocity = useRef(new Vector3(0, 0, 0)); // 3D Velocity for walking
     const quaternion = useRef(new Quaternion());
-    
+
     // Track last teleport to avoid re-teleporting
     const lastTeleportTarget = useRef<string | null>(null);
 
@@ -56,7 +58,7 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
             position.current.y = safeY + 100;
         }
     }, []);
-    
+
     // Handle teleport
     useEffect(() => {
         if (teleportTarget) {
@@ -66,12 +68,12 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
                 speed.current = 0;
                 velocity.current.set(0, 0, 0);
                 mode.current = 'flying';
-                
+
                 // If rotation is provided, apply it
                 if (teleportRotation) {
                     quaternion.current.set(teleportRotation[0], teleportRotation[1], teleportRotation[2], teleportRotation[3]);
                 }
-                
+
                 lastTeleportTarget.current = targetKey;
                 onMove(position.current);
             }
@@ -80,7 +82,7 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
 
     useFrame((state, delta) => {
         if (isPaused || !birdRef.current) return;
-        
+
         // When frozen (in lobby), just update visuals but don't move
         if (frozen) {
             // Gentle hovering animation
@@ -88,25 +90,28 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
             birdRef.current.position.copy(position.current);
             birdRef.current.position.y += hoverOffset;
             birdRef.current.quaternion.copy(quaternion.current);
-            
+
             // Gentle wing flap
             if (wingLeftRef.current && wingRightRef.current) {
                 const flapAngle = Math.sin(state.clock.elapsedTime * 4) * 0.2;
                 wingLeftRef.current.rotation.z = flapAngle + 0.2;
                 wingRightRef.current.rotation.z = -flapAngle - 0.2;
             }
-            
+
             // Camera still follows
             const camOffset = new Vector3(0, 5, -15).applyQuaternion(quaternion.current);
             const targetCamPos = position.current.clone().add(camOffset);
             camera.position.lerp(targetCamPos, delta * 3.0);
             camera.lookAt(position.current);
-            
+
             onMove(position.current);
             return;
         }
 
-        const { forward, backward, left, right, rollLeft, rollRight, boost, flap, dive, reset, mouseX, mouseY } = controls.current;
+        const { forward, backward, left, right, rollLeft, rollRight, boost, flap: spaceFlap, shoot, dive, reset, mouseX, mouseY } = controls.current;
+
+        // Flap if Space is pressed OR (Shoot/Click is pressed AND we haven't disabled click-to-flap)
+        const flap = spaceFlap || (shoot && !disableClickToFlap);
 
         // Reset Logic
         if (reset) {
@@ -122,7 +127,7 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
                 const safeY = Math.max(terrainY, WATER_LEVEL);
                 if (position.current.y < safeY + 50) position.current.y = safeY + 100;
             }
-            
+
             speed.current = 0.5;
             velocity.current.set(0, 0, 0);
             mode.current = 'flying';
@@ -155,7 +160,7 @@ export const Bird = React.memo(({ statsRef, onMove, isPaused, playFlapSound, rot
             const pitchSpeed = 1.5 * delta;
             const yawSpeed = 1.0 * delta;
             const rollSpeed = 2.0 * delta;
-            const baseSpeed = boost ? 1.2 : 0.6;
+            const baseSpeed = (boost ? 1.2 : 0.6) * speedMultiplier;
 
             const dz = 0.05;
             const mX = Math.abs(mouseX) < dz ? 0 : mouseX;
