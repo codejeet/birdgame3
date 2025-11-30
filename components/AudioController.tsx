@@ -28,9 +28,12 @@ const LOFI_PARTS = [
     '/music/lofi-part-08.mp3',
 ];
 
+// Pick a random starting part on module load (persists for session)
+const INITIAL_PART = Math.floor(Math.random() * LOFI_PARTS.length);
+
 export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ isPaused, settings }, ref) => {
     const bgmRef = useRef<HTMLAudioElement | null>(null);
-    const currentPartRef = useRef(0);
+    const currentPartRef = useRef(INITIAL_PART);
     const hasInteractedRef = useRef(false);
     
     // Multiple chirp sounds for variety
@@ -87,7 +90,8 @@ export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ 
         
         // Enable streaming - don't wait for full file to load
         audio.preload = 'none';
-        audio.src = LOFI_PARTS[0];
+        // Start at random part for variety each session
+        audio.src = LOFI_PARTS[INITIAL_PART];
         audio.volume = settings.musicMuted ? 0 : settings.musicVolume;
         
         // When current part ends, play the next one
@@ -123,7 +127,7 @@ export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ 
             if (bgmRef.current && !isPaused) {
                 bgmRef.current.play().then(() => {
                     hasInteractedRef.current = true;
-                    console.log(`🎵 Lofi stream started (part 1/${LOFI_PARTS.length})`);
+                    console.log(`🎵 Lofi stream started (part ${INITIAL_PART + 1}/${LOFI_PARTS.length})`);
                 }).catch(() => {
                     console.log('🎵 Audio autoplay prevented, waiting for interaction.');
                 });
@@ -136,7 +140,7 @@ export const AudioController = forwardRef<AudioHandle, AudioControllerProps>(({ 
             hasInteractedRef.current = true;
             if (bgmRef.current && bgmRef.current.paused && !isPaused) {
                 bgmRef.current.play().then(() => {
-                    console.log(`🎵 Lofi stream started (part 1/${LOFI_PARTS.length})`);
+                    console.log(`🎵 Lofi stream started (part ${INITIAL_PART + 1}/${LOFI_PARTS.length})`);
                 }).catch(() => { });
             }
             // Also prime SFX
