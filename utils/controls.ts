@@ -186,6 +186,12 @@ export function useControls(sensitivityMultiplier: number = 1.0) {
         input.current.dive = false;
         touchState.current.isDragging = false;
         touchState.current.primaryTouchId = null;
+        
+        // Reset virtual joystick to center
+        joystick.current.x = 0;
+        joystick.current.y = 0;
+        input.current.mouseX = 0;
+        input.current.mouseY = 0;
       }
       // If we still have one touch remaining (released the flap finger)
       else if (e.touches.length === 1) {
