@@ -10,8 +10,8 @@ export interface GameSettings {
 
 const DEFAULT_SETTINGS: GameSettings = {
   mouseSensitivity: 1.0,
-  musicVolume: 0.3,
-  sfxVolume: 0.4,
+  musicVolume: 0.1,
+  sfxVolume: 0.05,
   musicMuted: false,
   sfxMuted: false
 };
@@ -107,7 +107,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onSettingsC
               type="range"
               min="0"
               max="1"
-              step="0.05"
+              step="0.01"
               value={settings.musicVolume}
               onChange={(e) => handleChange('musicVolume', parseFloat(e.target.value))}
               disabled={settings.musicMuted}
@@ -137,7 +137,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, onSettingsC
               type="range"
               min="0"
               max="1"
-              step="0.05"
+              step="0.01"
               value={settings.sfxVolume}
               onChange={(e) => handleChange('sfxVolume', parseFloat(e.target.value))}
               disabled={settings.sfxMuted}

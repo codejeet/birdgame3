@@ -215,7 +215,7 @@ export const GameScene: React.FC = () => {
     setPendingRacePortalPosition([portalPos.x, portalPos.y, portalPos.z]);
   }, []);
 
-  const handleModeSelect = useCallback((mode: RingGameMode) => {
+  const handleModeSelect = useCallback((mode: RingGameMode | 'singleplayer') => {
     if (statsRef.current) {
       if (mode === 'race' && pendingRacePortalPosition) {
         // Create a lobby instead of starting immediately
@@ -226,8 +226,14 @@ export const GameScene: React.FC = () => {
         return;
       }
       
+      // For single player mode, randomly choose between mountain and skyward
+      let actualMode: RingGameMode = mode as RingGameMode;
+      if (mode === 'singleplayer') {
+        actualMode = Math.random() < 0.5 ? 'mountain' : 'skyward';
+      }
+      
       // For non-race modes, start immediately
-      statsRef.current.ringGameMode = mode;
+      statsRef.current.ringGameMode = actualMode;
       statsRef.current.isRingGameActive = true;
       setShowModeSelect(false);
       document.body.requestPointerLock();
@@ -402,33 +408,25 @@ export const GameScene: React.FC = () => {
 
       {showModeSelect && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-          <div className="bg-gradient-to-b from-indigo-900 to-purple-900 p-12 rounded-3xl border border-white/20 text-center shadow-2xl transform transition-all max-w-3xl w-full">
+          <div className="bg-gradient-to-b from-indigo-900 to-purple-900 p-12 rounded-3xl border border-white/20 text-center shadow-2xl transform transition-all max-w-2xl w-full">
             <h2 className="text-4xl font-black text-white mb-2 tracking-wider drop-shadow-lg italic">SELECT MODE</h2>
             <p className="text-blue-200 mb-8 text-lg">Choose your challenge</p>
 
-            <div className="grid grid-cols-3 gap-6">
+            <div className="grid grid-cols-2 gap-6">
               <button
-                onClick={() => handleModeSelect('mountain')}
-                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-yellow-400 rounded-2xl transition-all text-left"
+                onClick={() => handleModeSelect('singleplayer')}
+                className="group relative overflow-hidden p-8 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-400 rounded-2xl transition-all text-left"
               >
-                <div className="text-2xl font-bold text-yellow-400 mb-2 group-hover:scale-105 transition-transform">MOUNTAIN RUNNER</div>
-                <div className="text-sm text-gray-300">Weave between treacherous mountain peaks. High intensity low-altitude flying.</div>
-              </button>
-
-              <button
-                onClick={() => handleModeSelect('skyward')}
-                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-400 rounded-2xl transition-all text-left"
-              >
-                <div className="text-2xl font-bold text-cyan-400 mb-2 group-hover:scale-105 transition-transform">SKYWARD</div>
-                <div className="text-sm text-gray-300">Soar through the clouds in a classic high-altitude endurance test.</div>
+                <div className="text-2xl font-bold text-cyan-400 mb-2 group-hover:scale-105 transition-transform">SINGLE PLAYER</div>
+                <div className="text-sm text-gray-300">Infinite ring run through varied terrain. Randomly alternates between mountain peaks and high-altitude clouds.</div>
               </button>
 
               <button
                 onClick={() => handleModeSelect('race')}
-                className="group relative overflow-hidden p-6 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-green-400 rounded-2xl transition-all text-left"
+                className="group relative overflow-hidden p-8 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-green-400 rounded-2xl transition-all text-left"
               >
-                <div className="text-2xl font-bold text-green-400 mb-2 group-hover:scale-105 transition-transform">🏁 RACE LOBBY</div>
-                <div className="text-sm text-gray-300">Create a portal! Other birds can fly through to join your race.</div>
+                <div className="text-2xl font-bold text-green-400 mb-2 group-hover:scale-105 transition-transform">MULTI PLAYER</div>
+                <div className="text-sm text-gray-300">Create a race lobby! Other birds can fly through the portal to join your race.</div>
               </button>
             </div>
           </div>

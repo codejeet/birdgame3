@@ -82,6 +82,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
     const spawnCount = useRef(0);
     const lastSpawnTime = useRef(-100); // Allow immediate spawn at start
     const rngRef = useRef<SeededRNG>(new SeededRNG(123)); // Default seed
+    const initialSpawnDone = useRef(false); // Track if initial spawn has happened
 
     // Handle external clear signal (e.g. entering lobby)
     useEffect(() => {
@@ -90,6 +91,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
             setRings([]);
             gameActive.current = false;
             statsRef.current.isRingGameActive = false;
+            initialSpawnDone.current = false; // Allow new starter ring to spawn
         }
     }, [clearRings]);
 
@@ -136,7 +138,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         const forward = new Vector3(0, 0, 1).applyQuaternion(birdRotation).normalize();
 
         // Ensure it is reasonably close so the player can see it immediately
-        const dist = 200;
+        const dist = 400
 
         const startPos = birdPosition.clone().add(forward.multiplyScalar(dist));
 
@@ -163,6 +165,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
         ringsRef.current = [];
         setRings([]);
         lastSpawnTime.current = time;
+        initialSpawnDone.current = false; // Allow new starter ring to spawn
         
         // Notify multiplayer of game over
         onGameOver?.();
@@ -199,6 +202,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                     spawnRing(resetStartPos, resetForward, 'starter');
                     setRings([...ringsRef.current]);
                     lastSpawnTime.current = time;
+                    initialSpawnDone.current = true; // Mark as done since we just spawned
                 }
             }
             // While reset is held, do not process other logic
@@ -266,6 +270,7 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
                 ringsRef.current = [];
                 setRings([]);
                 lastSpawnTime.current = time; // Reset spawn timer
+                initialSpawnDone.current = false; // Allow new starter ring to spawn
             }
         }
         
@@ -289,7 +294,14 @@ export const RingManager: React.FC<RingManagerProps> = React.memo(({ birdPositio
             const now = state.clock.getElapsedTime();
             const timeSinceLastSpawn = now - lastSpawnTime.current;
             const currentSpeed = statsRef.current.speed;
-            if (timeSinceLastSpawn > COOLDOWN_PERIOD && currentSpeed < MAX_SPAWN_SPEED) {
+            
+            // On initial load, spawn immediately regardless of conditions
+            if (!initialSpawnDone.current) {
+                spawnStarterRing();
+                lastSpawnTime.current = now;
+                initialSpawnDone.current = true;
+            } else if (timeSinceLastSpawn > COOLDOWN_PERIOD && currentSpeed < MAX_SPAWN_SPEED) {
+                // For subsequent spawns, respect cooldown and speed checks
                 spawnStarterRing();
                 lastSpawnTime.current = now;
             }
