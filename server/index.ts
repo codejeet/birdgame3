@@ -600,6 +600,7 @@ io.on('connection', (socket: Socket) => {
     socket.leave(`race:${player.raceId}`);
     player.inRace = false;
     player.raceId = null;
+    player.lobbyId = null; // Ensure lobby ID is cleared
     player.raceCheckpoints = 0;
 
     console.log(`${player.name} left race`);
